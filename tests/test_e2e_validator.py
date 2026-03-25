@@ -34,8 +34,8 @@ def _record(
         split="train",
         clip_start_sec=start,
         duration_sec=5.0,
-        width=640,
-        height=360,
+        width=1280,
+        height=720,
         fps=30.0,
         num_frames=150,
         has_audio=True,
@@ -615,7 +615,10 @@ def test_validator_runs_hard_checks_on_full_records(monkeypatch: pytest.MonkeyPa
     run_async(run())
 
 
-def test_validator_source_auth_failure_rejects_interval(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_source_auth_only_validator_rejects_on_source_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     async def run() -> None:
         store = LocalObjectStore(tmp_path / "store")
         hotkey = "miner1"
@@ -657,6 +660,7 @@ def test_validator_source_auth_failure_rejects_interval(monkeypatch: pytest.Monk
         pipeline = ValidatorPipeline(
             store_for_hotkey=lambda _: store,
             source_authenticity_enabled=True,
+            source_auth_only=True,
         )
         decisions, _weights = await pipeline.validate_interval(
             candidate_hotkeys=[hotkey],
@@ -664,6 +668,77 @@ def test_validator_source_auth_failure_rejects_interval(monkeypatch: pytest.Monk
         )
         assert decisions[0].accepted is False
         assert "source_frame_mismatch:c1" in decisions[0].failures
+
+    run_async(run())
+
+
+def test_source_auth_only_fail_open_on_download_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        store = LocalObjectStore(tmp_path / "store")
+        hotkey = "miner1"
+        interval_id = 81
+        key_base = f"{interval_id}"
+
+        clip = tmp_path / "clip.mp4"
+        frame = tmp_path / "frame.jpg"
+        clip.write_bytes(b"clip")
+        frame.write_bytes(b"frame")
+        row = _record(
+            "c1",
+            0.0,
+            clip_sha256=sha256_file(clip),
+            frame_sha256=sha256_file(frame),
+        )
+        dataset = tmp_path / "dataset.parquet"
+        manifest = tmp_path / "manifest.json"
+        write_dataset_parquet([row], dataset)
+        write_manifest(
+            IntervalManifest(
+                netuid=1,
+                miner_hotkey=hotkey,
+                interval_id=interval_id,
+                record_count=1,
+                dataset_sha256=sha256_file(dataset),
+            ),
+            manifest,
+        )
+        await store.upload_file(f"{key_base}/dataset.parquet", dataset)
+        await store.upload_file(f"{key_base}/manifest.json", manifest)
+        await store.upload_file(f"{key_base}/{row.first_frame_uri}", frame)
+
+        monkeypatch.setattr(
+            "nexis.validator.pipeline.download_youtube_video",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("anti bot")),
+        )
+        pipeline = ValidatorPipeline(
+            store_for_hotkey=lambda _: store,
+            source_authenticity_enabled=True,
+            source_auth_only=True,
+        )
+        decisions, _weights = await pipeline.validate_interval(
+            candidate_hotkeys=[hotkey],
+            interval_id=interval_id,
+        )
+        assert len(decisions) == 1
+        assert decisions[0].accepted is True
+
+    run_async(run())
+
+
+def test_validator_pipeline_skips_api_invalid_hotkeys(tmp_path: Path) -> None:
+    async def run() -> None:
+        store = LocalObjectStore(tmp_path / "store")
+        pipeline = ValidatorPipeline(store_for_hotkey=lambda _: store)
+        decisions, weights = await pipeline.validate_interval(
+            candidate_hotkeys=["hk1", "hk2"],
+            interval_id=99,
+            invalid_hotkeys={"hk1", "hk2"},
+        )
+        assert decisions == []
+        assert weights == {}
 
     run_async(run())
 

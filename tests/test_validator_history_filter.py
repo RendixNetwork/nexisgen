@@ -6,16 +6,16 @@ from nexis.validator.pipeline import ValidatorPipeline
 from .helpers import run_async
 
 
-def test_validator_skips_selected_miner_with_recent_failure_history() -> None:
+def test_validator_skips_selected_miner_with_api_invalid_hotkeys() -> None:
     async def run() -> None:
         def _store_for_hotkey(_hotkey: str) -> object:
             raise AssertionError("store lookup should not happen for history-rejected miner")
 
         pipeline = ValidatorPipeline(store_for_hotkey=_store_for_hotkey)
-        pipeline.weight_computer.update_failure_history({"hk1": False})
         decisions, weights = await pipeline.validate_interval(
             candidate_hotkeys=["hk1"],
             interval_id=100,
+            invalid_hotkeys={"hk1"},
         )
         assert decisions == []
         assert weights == {}
@@ -23,7 +23,7 @@ def test_validator_skips_selected_miner_with_recent_failure_history() -> None:
     run_async(run())
 
 
-def test_sampling_runs_on_history_eligible_hotkeys_only(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sampling_runs_on_api_eligible_hotkeys_only(monkeypatch: pytest.MonkeyPatch) -> None:
     async def run() -> None:
         observed_sampling_input: list[str] = []
 
@@ -44,13 +44,13 @@ def test_sampling_runs_on_history_eligible_hotkeys_only(monkeypatch: pytest.Monk
             )
 
         pipeline = ValidatorPipeline(store_for_hotkey=lambda _hotkey: object())
-        pipeline.weight_computer.update_failure_history({"bad_hk": False})
         monkeypatch.setattr("nexis.validator.pipeline.select_miners", fake_select_miners)
         monkeypatch.setattr(pipeline, "_load_submission", fake_load_submission)
 
         decisions, _weights = await pipeline.validate_interval(
             candidate_hotkeys=["bad_hk", "good_hk_1", "good_hk_2"],
             interval_id=101,
+            invalid_hotkeys={"bad_hk"},
         )
         assert observed_sampling_input == ["good_hk_1", "good_hk_2"]
         assert len(decisions) == 2

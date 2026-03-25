@@ -58,16 +58,21 @@ At a high level:
 - discovers miner credentials and active interval submissions
 - validates miner datasets with schema and anti-cheat checks
 - samples and verifies clip/frame assets
-- optionally runs source authenticity and semantic caption checks
+- enforces sampled clip resolution (`1280x720`)
+- runs optional semantic caption checks
 - prunes overlap rows and arbitrates cross-miner conflicts
 - computes miner scores and submits chain weights
+- fetches invalid hotkeys from validation API and zeros them before `set_weights`
 
 ### Owner-validator (special validator mode)
 
 When validator hotkey equals `NEXIS_OWNER_VALIDATOR_HOTKEY`, it also:
 
-- publishes accepted bundles to owner dataset bucket (`NEXIS_OWNER_DB_BUCKET`)
+- publishes accepted metadata bundles (`dataset.parquet`, `manifest.json`) to
+  record-info bucket (`NEXIS_RECORD_INFO_BUCKET`)
 - writes the shared overlap index snapshot (`NEXIS_RECORD_INFO_OBJECT_KEY`)
+- can run an independent `nexis sync-owner-datasets` worker to copy full assets
+  into owner dataset bucket (`NEXIS_OWNER_DB_BUCKET`)
 
 ## System Requirements
 
@@ -241,16 +246,25 @@ if all required checks pass.
 5. **Sampled asset verification**
    - validator samples rows
    - verifies clip/frame assets against SHA256 fields
-6. **Optional source authenticity check**
-   - validator downloads source video and frame-compares sampled records
-7. **Optional semantic caption check**
+   - validates sampled clip resolution is exactly `1280x720`
+6. **Optional semantic caption check**
    - model checks whether caption matches sampled multi-frame visual context
-8. **Overlap pruning**
+7. **Overlap pruning**
    - rows already seen in global index are pruned
    - cross-miner same-source overlaps are arbitrated by earliest manifest time
-9. **Decision + scoring**
+8. **Decision + scoring**
    - emits per-miner accept/reject decision with failure reasons
-   - computes interval scores and submits chain weights every 250 blocks
+   - API maintains invalid-hotkey windows (`interval_id-500` to `interval_id`)
+   - validator zeros API-invalid hotkeys before submitting chain weights
+
+### Optional source-auth sidecar
+
+Run source authenticity in a separate container/process:
+
+- command: `nexis validate-source-auth`
+- uses same interval/miner/row sampling logic
+- posts invalid hotkeys to API (`POST /v1/invalid-hotkeys`)
+- treats source download anti-bot errors as fail-open (miner remains valid)
 
 ### How to observe validation results
 
@@ -310,6 +324,12 @@ nexis mine
 
 # run validator
 nexis validate
+
+# run source-auth sidecar validator
+nexis validate-source-auth
+
+# run independent owner dataset copy worker (every 60s)
+nexis sync-owner-datasets --poll-sec 60
 ```
 
 ## Troubleshooting

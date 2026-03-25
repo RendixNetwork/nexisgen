@@ -18,5 +18,5 @@ def test_deterministic_row_sampling() -> None:
     a = select_row_indices(rows, hk, seed)
     b = select_row_indices(rows, hk, seed)
     assert a == b
-    assert len(a) <= 10
+    assert len(a) <= 3
 

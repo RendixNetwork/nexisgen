@@ -351,6 +351,10 @@ def test_run_validator_loop_reports_interval_results(monkeypatch, tmp_path) -> N
             )
 
     class FakeReporter:
+        async def fetch_invalid_hotkeys(self, *, interval_id: int) -> list[str]:
+            _ = interval_id
+            return []
+
         async def report_interval(self, *, interval_id: int, decisions: list[ValidationDecision]) -> bool:
             reported.append((interval_id, len(decisions)))
             return True

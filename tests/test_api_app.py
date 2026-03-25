@@ -23,6 +23,7 @@ class _FakeDatabase:
 class _FakeRepository:
     def __init__(self, _db: _FakeDatabase):
         self._rows: dict[tuple[str, int, str], dict[str, Any]] = {}
+        self._invalid_by_interval: dict[int, set[str]] = {}
 
     async def ensure_schema(self) -> None:
         return None
@@ -68,7 +69,35 @@ class _FakeRepository:
                 "body_sha256": body_sha256,
                 "received_at": "2026-01-01T00:00:00+00:00",
             }
+            if not bool(decision.accepted):
+                self._invalid_by_interval.setdefault(int(interval_id), set()).add(
+                    str(decision.miner_hotkey)
+                )
         return len(decisions)
+
+    async def upsert_interval_invalid_hotkeys(
+        self,
+        *,
+        interval_id: int,
+        invalid_hotkeys: list[str],
+    ) -> None:
+        values = self._invalid_by_interval.setdefault(int(interval_id), set())
+        for item in invalid_hotkeys:
+            hotkey = str(item).strip()
+            if hotkey:
+                values.add(hotkey)
+
+    async def get_invalid_hotkeys_in_interval_range(
+        self,
+        *,
+        start_interval_id: int,
+        end_interval_id: int,
+    ) -> list[str]:
+        merged: set[str] = set()
+        for interval, hotkeys in self._invalid_by_interval.items():
+            if start_interval_id <= interval <= end_interval_id:
+                merged.update(hotkeys)
+        return sorted(merged)
 
     async def get_interval_decisions(
         self,
@@ -256,4 +285,74 @@ def test_get_latest_result_returns_cached_window(monkeypatch) -> None:  # type: 
         assert payload["refreshed_every_blocks"] == 50
         # Endpoint must return only cache snapshot and never refresh on request.
         assert payload["decisions"] == []
+
+
+def test_get_invalid_hotkeys_window_union(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr("nexis.api.app.Database", _FakeDatabase)
+    monkeypatch.setattr("nexis.api.app.ValidationEvidenceRepository", _FakeRepository)
+    monkeypatch.setattr("nexis.api.app.MetagraphAllowlistSync", _FakeAllowlistSync)
+    monkeypatch.setattr("nexis.api.app.RequestAuthenticator", _FakeAuthenticator)
+
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.post(
+            "/v1/validation-results",
+            json={
+                "interval_id": 100,
+                "decisions": [
+                    {
+                        "miner_hotkey": "miner-a",
+                        "accepted": False,
+                        "failures": ["bad_caption"],
+                        "record_count": 1,
+                        "global_overlap_pruned_count": 0,
+                        "cross_miner_overlap_pruned_count": 0,
+                    }
+                ],
+            },
+        ).status_code == 200
+        assert client.post(
+            "/v1/validation-results",
+            json={
+                "interval_id": 250,
+                "decisions": [
+                    {
+                        "miner_hotkey": "miner-b",
+                        "accepted": False,
+                        "failures": ["bad_caption"],
+                        "record_count": 1,
+                        "global_overlap_pruned_count": 0,
+                        "cross_miner_overlap_pruned_count": 0,
+                    }
+                ],
+            },
+        ).status_code == 200
+
+        response = client.get("/v1/invalid-hotkeys", params={"interval_id": 600})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["window_start_interval_id"] == 100
+        assert payload["window_end_interval_id"] == 600
+        assert payload["invalid_hotkeys"] == ["miner-a", "miner-b"]
+
+
+def test_post_invalid_hotkeys_requires_auth_and_merges(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr("nexis.api.app.Database", _FakeDatabase)
+    monkeypatch.setattr("nexis.api.app.ValidationEvidenceRepository", _FakeRepository)
+    monkeypatch.setattr("nexis.api.app.MetagraphAllowlistSync", _FakeAllowlistSync)
+    monkeypatch.setattr("nexis.api.app.RequestAuthenticator", _FakeAuthenticator)
+
+    app = create_app()
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/v1/invalid-hotkeys",
+            json={"interval_id": 777, "invalid_hotkeys": ["miner-x", "miner-y", "miner-x"]},
+        )
+        assert create_resp.status_code == 200
+        assert create_resp.json()["validator_hotkey"] == "vk1"
+        assert create_resp.json()["saved_count"] == 2
+
+        fetch_resp = client.get("/v1/invalid-hotkeys", params={"interval_id": 777})
+        assert fetch_resp.status_code == 200
+        assert fetch_resp.json()["invalid_hotkeys"] == ["miner-x", "miner-y"]
 

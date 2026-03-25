@@ -81,3 +81,27 @@ class LatestResultResponse(BaseModel):
     cached_at: datetime
     decisions: list[LatestResultDecision] = Field(default_factory=list)
 
+
+class InvalidHotkeysWindowResponse(BaseModel):
+    interval_id: int = Field(ge=0)
+    window_start_interval_id: int = Field(ge=0)
+    window_end_interval_id: int = Field(ge=0)
+    invalid_hotkeys: list[str] = Field(default_factory=list)
+
+
+class InvalidHotkeysIngestRequest(BaseModel):
+    interval_id: int = Field(ge=0)
+    invalid_hotkeys: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _invalid_hotkeys_non_empty(self) -> "InvalidHotkeysIngestRequest":
+        if not self.invalid_hotkeys:
+            raise ValueError("invalid_hotkeys must not be empty")
+        return self
+
+
+class InvalidHotkeysIngestResponse(BaseModel):
+    validator_hotkey: str
+    interval_id: int = Field(ge=0)
+    saved_count: int = Field(ge=0)
+

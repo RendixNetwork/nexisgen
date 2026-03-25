@@ -64,10 +64,6 @@ class Settings(BaseSettings):
         default=8,
         alias="NEXIS_VALIDATOR_SEMANTIC_MAX_SAMPLES",
     )
-    validator_source_auth_enabled: bool = Field(
-        default=True,
-        alias="NEXIS_VALIDATOR_SOURCE_AUTH_ENABLED",
-    )
 
     owner_validator_hotkey: str = Field(
         default="5EUdjwHz9pW4ftQQQga9PKq7knGiGW9wcHUjkDSih7zpovPy",

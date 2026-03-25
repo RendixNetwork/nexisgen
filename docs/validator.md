@@ -28,7 +28,8 @@ docker inspect --format '{{index .RepoDigests 0}}' nexis-validator
   - submits chain weights
   - reads shared `record_info` overlap index
 - **Owner-validator** (hotkey matches `NEXIS_OWNER_VALIDATOR_HOTKEY`):
-  - publishes accepted bundles to owner dataset bucket
+  - publishes accepted metadata bundles (`dataset.parquet`, `manifest.json`) to record-info bucket
+  - runs optional independent worker (`nexis sync-owner-datasets`) to copy full assets to owner dataset bucket
   - writes updated overlap index snapshot
 
 ## Environment Matrix
@@ -53,7 +54,6 @@ docker inspect --format '{{index .RepoDigests 0}}' nexis-validator
 
 - `NEXIS_LOG_LEVEL`
 - `NEXIS_VALIDATOR_ENABLED_SPECS` (default `video_v1`)
-- `NEXIS_VALIDATOR_SOURCE_AUTH_ENABLED` (default `true`)
 - `NEXIS_VALIDATOR_SEMANTIC_CHECK_ENABLED` (default `true`)
 - `NEXIS_VALIDATOR_SEMANTIC_MODEL`
 - `NEXIS_VALIDATOR_SEMANTIC_TIMEOUT_SEC`
@@ -82,12 +82,20 @@ docker inspect --format '{{index .RepoDigests 0}}' nexis-validator
 - validates each closed 50-block interval (`[start, start+50)`) after reserve (`2` blocks)
 - runs hard checks on full record sets
 - verifies sampled clip/frame assets against row SHA256 fields
+- enforces sampled clip resolution (`1280x720`)
 - runs optional semantic caption-vs-multi-frame checks on sampled rows
-- runs source authenticity checks (max 3 sampled rows per miner)
 - prunes row-level overlaps using shared `nexis-record-info` index
 - arbitrates same-interval cross-miner overlaps via earliest manifest `created_at`
+- fetches invalid hotkeys from API for `[interval_id-500, interval_id]`
 - accumulates scores and submits `set_weights` every 250 blocks
-- owner validator publishes accepted bundles to `nexis-dataset` and updates `nexis-record-info`
+- zeros invalid hotkeys before `set_weights`
+- owner validator publishes metadata to `nexis-record-info` and updates overlap snapshot
+
+`nexis validate-source-auth` runs source-auth-only validation:
+
+- uses same interval/miner/row sampling logic as main validator
+- validates source authenticity and posts invalid hotkeys to API
+- anti-bot/download errors are fail-open (miner treated as valid for source-auth stage)
 
 The blacklist file is always applied. Stop with `Ctrl+C`.
 
@@ -96,6 +104,10 @@ The blacklist file is always applied. Stop with `Ctrl+C`.
 ```bash
 nexis validate
 nexis validate --specs video_v1
+# source-auth sidecar
+nexis validate-source-auth
+# independent owner copy worker
+nexis sync-owner-datasets --poll-sec 60
 # optional debug logging:
 # nexis validate --debug
 # optional poll override:

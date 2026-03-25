@@ -1,0 +1,22 @@
+name: nexis-owner-sync-worker
+
+services:
+  owner-sync-worker:
+    image: ${NEXIS_VALIDATOR_IMAGE:-rendixnetwork/nexis:latest}
+    container_name: nexis-owner-sync-worker
+    restart: unless-stopped
+    env_file:
+      - ${VALIDATOR_ENV_FILE:-./validator.env}
+    command: ["sync-owner-datasets", "--poll-sec", "60"]
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+      - /root/.bittensor:rw,nosuid,nodev,noexec,size=64m,uid=0,gid=0,mode=0700
+    volumes:
+      - ${NEXIS_WORKDIR_HOST_PATH:-./data/nexis}:/var/lib/nexis
+      - ${BT_WALLET_HOST_PATH:?BT_WALLET_HOST_PATH is required}:/root/.bittensor/wallets:ro
+      - ${VALIDATOR_BLACKLIST_HOST_PATH:-../validator_blacklist_hotkeys.txt}:/config/validator_blacklist_hotkeys.txt:ro

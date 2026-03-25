@@ -18,6 +18,9 @@ from .metagraph_sync import MetagraphAllowlistSync, ValidatorAllowlistCache
 from .repository import ValidationEvidenceRepository
 from .schemas import (
     IngestResponse,
+    InvalidHotkeysIngestRequest,
+    InvalidHotkeysIngestResponse,
+    InvalidHotkeysWindowResponse,
     LatestResultDecision,
     LatestResultResponse,
     QueryResponse,
@@ -211,6 +214,44 @@ def create_app() -> FastAPI:
             validator_hotkey=validator_hotkey,
             interval_id=interval_id,
             decisions=decisions,
+        )
+
+    @app.get("/v1/invalid-hotkeys", response_model=InvalidHotkeysWindowResponse)
+    async def get_invalid_hotkeys(
+        interval_id: int = Query(ge=0),
+    ) -> InvalidHotkeysWindowResponse:
+        window_start = max(int(interval_id) - 500, 0)
+        invalid_hotkeys = await repository.get_invalid_hotkeys_in_interval_range(
+            start_interval_id=window_start,
+            end_interval_id=int(interval_id),
+        )
+        return InvalidHotkeysWindowResponse(
+            interval_id=int(interval_id),
+            window_start_interval_id=window_start,
+            window_end_interval_id=int(interval_id),
+            invalid_hotkeys=invalid_hotkeys,
+        )
+
+    @app.post("/v1/invalid-hotkeys", response_model=InvalidHotkeysIngestResponse)
+    async def post_invalid_hotkeys(request: Request) -> InvalidHotkeysIngestResponse:
+        body = await request.body()
+        auth = await authenticator.authenticate(request, body)
+        try:
+            payload = InvalidHotkeysIngestRequest.model_validate_json(body)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=exc.errors(),
+            ) from exc
+        deduped = sorted({item.strip() for item in payload.invalid_hotkeys if item.strip()})
+        await repository.upsert_interval_invalid_hotkeys(
+            interval_id=payload.interval_id,
+            invalid_hotkeys=deduped,
+        )
+        return InvalidHotkeysIngestResponse(
+            validator_hotkey=auth.validator_hotkey,
+            interval_id=payload.interval_id,
+            saved_count=len(deduped),
         )
 
     @app.get("/v1/get_latest_result", response_model=LatestResultResponse)

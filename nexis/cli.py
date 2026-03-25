@@ -38,6 +38,7 @@ from .validator.owner_sync import (
     merge_records_into_index as owner_merge_records_into_index,
     parse_record_info as owner_parse_record_info,
     serialize_record_info as owner_serialize_record_info,
+    sync_record_info_to_owner_bucket_async as owner_sync_record_info_to_owner_bucket_async,
     upload_record_info_snapshot_async as owner_upload_record_info_snapshot_async,
     upload_validated_datasets_to_owner_bucket_async as owner_upload_validated_datasets_to_owner_bucket_async,
 )
@@ -197,6 +198,23 @@ async def _upload_validated_datasets_to_owner_bucket(
         decisions=decisions,
         interval_id=interval_id,
         workdir=workdir,
+    )
+
+
+async def _sync_record_info_to_owner_bucket(
+    *,
+    record_info_store: HippiusS3Store | None,
+    owner_store: HippiusS3Store | None,
+    source_store_for_hotkey: Callable[[str], HippiusS3Store],
+    workdir: Path,
+    spec_registry: DatasetSpecRegistry,
+) -> dict[str, int]:
+    return await owner_sync_record_info_to_owner_bucket_async(
+        record_info_store=record_info_store,
+        owner_store=owner_store,
+        source_store_for_hotkey=source_store_for_hotkey,
+        workdir=workdir,
+        spec_registry=spec_registry,
     )
 
 
@@ -703,7 +721,7 @@ def validate(
     validator = ValidatorPipeline(
         store_for_hotkey=store_for_hotkey,
         caption_semantic_checker=semantic_checker,
-        source_authenticity_enabled=settings.validator_source_auth_enabled,
+        source_authenticity_enabled=False,
         spec_registry=spec_registry,
         enabled_specs=enabled_specs,
     )
@@ -746,6 +764,227 @@ def validate(
         )
     except KeyboardInterrupt:
         console.print("validator loop stopped")
+
+
+@app.command("validate-source-auth")
+def validate_source_auth(
+    blacklist_file: Path | None = typer.Option(
+        None,
+        "--blacklist-file",
+        help="Blacklist file path override (always enforced when present).",
+    ),
+    exclude_hotkeys: str = typer.Option(
+        "",
+        "--exclude-hotkeys",
+        help="Additional comma-separated hotkeys to exclude for this run.",
+    ),
+    poll_sec: float | None = typer.Option(
+        None,
+        "--poll-sec",
+        help="Block polling interval in seconds (default from NEXIS_BLOCK_POLL_SEC).",
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Enable verbose debug logging for source-auth validator loop.",
+    ),
+    specs: str = typer.Option(
+        "",
+        "--specs",
+        help="Comma-separated dataset spec IDs to validate (defaults to NEXIS_VALIDATOR_ENABLED_SPECS).",
+    ),
+) -> None:
+    from .chain.credentials import ReadCredentialCommitmentManager
+    import bittensor as bt
+
+    settings = load_settings()
+    evidence_url = settings.validation_api_url.strip()
+    if not evidence_url:
+        raise typer.BadParameter(
+            "NEXIS_VALIDATION_API_URL is required for validate-source-auth mode"
+        )
+    spec_registry = DatasetSpecRegistry.with_defaults()
+    enabled_specs = _resolve_enabled_specs(
+        specs.strip() or settings.validator_enabled_specs,
+        spec_registry,
+    )
+    poll_seconds = settings.block_poll_sec if poll_sec is None else poll_sec
+    validator_hotkey = _resolve_hotkey_ss58_from_wallet(settings)
+    _configure_logging("INFO", debug=debug)
+
+    manager = ReadCredentialCommitmentManager(
+        netuid=settings.netuid,
+        network=settings.bt_network,
+        wallet_name=settings.bt_wallet_name,
+        wallet_hotkey=settings.bt_wallet_hotkey,
+        wallet_path=settings.bt_wallet_path,
+        hippius_endpoint_url=settings.hippius_s3_endpoint,
+        hippius_region=settings.hippius_s3_region,
+    )
+    store_cache: dict[str, HippiusS3Store] = {}
+    committed_payload: dict[str, dict] = {}
+
+    def store_for_hotkey(hotkey: str) -> HippiusS3Store:
+        cached = store_cache.get(hotkey)
+        if cached is not None:
+            return cached
+        creds = manager.build_hippius_credentials(committed_payload.get(hotkey))
+        if creds is None:
+            raise RuntimeError(f"missing committed read credentials for {hotkey}")
+        store = HippiusS3Store(creds)
+        store_cache[hotkey] = store
+        return store
+
+    record_info_read_store: HippiusS3Store | None = None
+    record_info_read_creds = _build_shared_bucket_credentials(
+        settings=settings,
+        bucket_name=settings.record_info_bucket,
+        read_access_key=settings.record_info_read_access_key,
+        read_secret_key=settings.record_info_read_secret_key,
+        write_access_key="",
+        write_secret_key="",
+    )
+    if record_info_read_creds is not None:
+        record_info_read_store = HippiusS3Store(record_info_read_creds)
+    else:
+        logger.warning("record info read credentials missing; overlap index sync disabled")
+
+    validator = ValidatorPipeline(
+        store_for_hotkey=store_for_hotkey,
+        caption_semantic_checker=None,
+        source_authenticity_enabled=True,
+        source_auth_only=True,
+        spec_registry=spec_registry,
+        enabled_specs=enabled_specs,
+    )
+    wallet = bt.wallet(
+        name=settings.bt_wallet_name,
+        hotkey=settings.bt_wallet_hotkey,
+        path=str(settings.bt_wallet_path.expanduser()),
+    )
+    hotkey_signer = getattr(wallet, "hotkey", None)
+    if hotkey_signer is None or not hasattr(hotkey_signer, "sign"):
+        raise typer.BadParameter("wallet hotkey signer is unavailable for validation API reporting")
+    reporter = ValidationResultReporter(
+        endpoint_url=evidence_url,
+        hotkey_ss58=validator_hotkey,
+        hotkey_signer=hotkey_signer,
+        timeout_sec=settings.validation_api_timeout_sec,
+    )
+    try:
+        asyncio.run(
+            _run_source_auth_validator_loop(
+                settings=settings,
+                poll_seconds=poll_seconds,
+                enabled_specs=enabled_specs,
+                manager=manager,
+                store_cache=store_cache,
+                committed_payload=committed_payload,
+                validator=validator,
+                blacklist_file=blacklist_file,
+                exclude_hotkeys=exclude_hotkeys,
+                reporter=reporter,
+                record_info_read_store=record_info_read_store,
+            )
+        )
+    except KeyboardInterrupt:
+        console.print("source-auth validator loop stopped")
+
+
+@app.command("sync-owner-datasets")
+def sync_owner_datasets(
+    blacklist_file: Path | None = typer.Option(
+        None,
+        "--blacklist-file",
+        help="Blacklist file path override (always enforced when present).",
+    ),
+    exclude_hotkeys: str = typer.Option(
+        "",
+        "--exclude-hotkeys",
+        help="Additional comma-separated hotkeys to exclude for this run.",
+    ),
+    poll_sec: float = typer.Option(
+        60.0,
+        "--poll-sec",
+        help="Polling interval in seconds for metadata scan.",
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Enable verbose debug logging for owner sync worker loop.",
+    ),
+) -> None:
+    from .chain.credentials import ReadCredentialCommitmentManager
+
+    settings = load_settings()
+    _configure_logging("INFO", debug=debug)
+    manager = ReadCredentialCommitmentManager(
+        netuid=settings.netuid,
+        network=settings.bt_network,
+        wallet_name=settings.bt_wallet_name,
+        wallet_hotkey=settings.bt_wallet_hotkey,
+        wallet_path=settings.bt_wallet_path,
+        hippius_endpoint_url=settings.hippius_s3_endpoint,
+        hippius_region=settings.hippius_s3_region,
+    )
+    store_cache: dict[str, HippiusS3Store] = {}
+    committed_payload: dict[str, dict] = {}
+
+    owner_db_creds = _build_shared_bucket_credentials(
+        settings=settings,
+        bucket_name=settings.owner_db_bucket,
+        read_access_key=settings.owner_db_read_access_key,
+        read_secret_key=settings.owner_db_read_secret_key,
+        write_access_key=settings.owner_db_write_access_key,
+        write_secret_key=settings.owner_db_write_secret_key,
+    )
+    if owner_db_creds is None:
+        raise typer.BadParameter("owner dataset bucket credentials are required")
+    owner_db_store = HippiusS3Store(owner_db_creds)
+
+    record_info_read_creds = _build_shared_bucket_credentials(
+        settings=settings,
+        bucket_name=settings.record_info_bucket,
+        read_access_key=settings.record_info_read_access_key,
+        read_secret_key=settings.record_info_read_secret_key,
+        write_access_key="",
+        write_secret_key="",
+    )
+    if record_info_read_creds is None:
+        raise typer.BadParameter("record-info bucket read credentials are required")
+    record_info_read_store = HippiusS3Store(record_info_read_creds)
+
+    spec_registry = DatasetSpecRegistry.with_defaults()
+
+    def store_for_hotkey(hotkey: str) -> HippiusS3Store:
+        cached = store_cache.get(hotkey)
+        if cached is not None:
+            return cached
+        creds = manager.build_hippius_credentials(committed_payload.get(hotkey))
+        if creds is None:
+            raise RuntimeError(f"missing committed read credentials for {hotkey}")
+        store = HippiusS3Store(creds)
+        store_cache[hotkey] = store
+        return store
+
+    try:
+        asyncio.run(
+            _run_owner_sync_worker_loop(
+                settings=settings,
+                poll_seconds=max(poll_sec, 1.0),
+                manager=manager,
+                store_cache=store_cache,
+                committed_payload=committed_payload,
+                owner_db_store=owner_db_store,
+                record_info_read_store=record_info_read_store,
+                store_for_hotkey=store_for_hotkey,
+                blacklist_file=blacklist_file,
+                exclude_hotkeys=exclude_hotkeys,
+                spec_registry=spec_registry,
+            )
+        )
+    except KeyboardInterrupt:
+        console.print("owner dataset sync worker stopped")
 
 
 async def _run_validator_loop(
@@ -846,6 +1085,19 @@ async def _run_validator_loop(
                                 _interval_label(next_interval_start),
                                 len(hotkeys),
                             )
+                            invalid_hotkeys_for_interval: set[str] = set()
+                            if reporter is not None:
+                                invalid_hotkeys_for_interval = set(
+                                    await reporter.fetch_invalid_hotkeys(
+                                        interval_id=next_interval_start
+                                    )
+                                )
+                                if invalid_hotkeys_for_interval:
+                                    logger.info(
+                                        "api invalid hotkeys interval=%s count=%d",
+                                        _interval_label(next_interval_start),
+                                        len(invalid_hotkeys_for_interval),
+                                    )
                             global_record_index, record_info_loaded = await _load_record_info_snapshot(
                                 record_info_store=record_info_read_store,
                                 object_key=settings.record_info_object_key,
@@ -856,6 +1108,7 @@ async def _run_validator_loop(
                                 interval_id=next_interval_start,
                                 workdir=settings.workdir / "validator",
                                 global_record_index=global_record_index,
+                                invalid_hotkeys=invalid_hotkeys_for_interval,
                             )
                             if reporter is not None:
                                 await reporter.report_interval(
@@ -888,7 +1141,7 @@ async def _run_validator_loop(
                             if is_owner_validator:
                                 try:
                                     published_rows_by_hotkey = await _upload_validated_datasets_to_owner_bucket(
-                                        owner_store=owner_db_store,
+                                        owner_store=record_info_write_store,
                                         source_store_for_hotkey=store_for_hotkey,
                                         validator=validator,
                                         decisions=decisions,
@@ -954,6 +1207,22 @@ async def _run_validator_loop(
                             frozen_epoch_weights = validator.weight_computer.compute_weights_from_totals(
                                 dict(epoch_score_totals)
                             )
+                        if reporter is not None and frozen_epoch_weights:
+                            current_interval_id = _current_interval_start(current_block)
+                            invalid_for_submission = set(
+                                await reporter.fetch_invalid_hotkeys(interval_id=current_interval_id)
+                            )
+                            if invalid_for_submission:
+                                for hotkey in invalid_for_submission:
+                                    if hotkey in frozen_epoch_weights:
+                                        frozen_epoch_weights[hotkey] = 0.0
+                                frozen_epoch_weights = validator.weight_computer.normalize_weights(
+                                    frozen_epoch_weights
+                                )
+                                logger.info(
+                                    "zeroed invalid hotkeys before set_weights count=%d",
+                                    len(invalid_for_submission),
+                                )
                         frozen_epoch = current_weight_epoch
                     submission = await submit_weights_to_chain_async(
                         netuid=settings.netuid,
@@ -1001,6 +1270,154 @@ async def _run_validator_loop(
             except Exception as exc:
                 logger.exception("validator loop iteration failed: %s", exc)
 
+            await _sleep_poll(poll_seconds)
+
+
+async def _run_source_auth_validator_loop(
+    *,
+    settings: Settings,
+    poll_seconds: float,
+    enabled_specs: list[str],
+    manager: "ReadCredentialCommitmentManager",
+    store_cache: dict[str, HippiusS3Store],
+    committed_payload: dict[str, dict],
+    validator: ValidatorPipeline,
+    blacklist_file: Path | None,
+    exclude_hotkeys: str,
+    reporter: ValidationResultReporter,
+    record_info_read_store: HippiusS3Store | None,
+) -> None:
+    async with _open_subtensor(settings.bt_network) as subtensor:
+        start_block = await fetch_current_block_async(
+            network=settings.bt_network,
+            subtensor=subtensor,
+        )
+        initial_latest_eligible = _latest_eligible_validation_interval_start(start_block)
+        if initial_latest_eligible is None:
+            last_validated_interval_start = -INTERVAL_LENGTH_BLOCKS
+        else:
+            last_validated_interval_start = initial_latest_eligible - INTERVAL_LENGTH_BLOCKS
+        logger.info(
+            "source-auth validator loop initialized validate_blocks=%d poll_sec=%.1f specs=%s",
+            INTERVAL_LENGTH_BLOCKS,
+            poll_seconds,
+            ",".join(enabled_specs),
+        )
+        while True:
+            try:
+                current_block = await fetch_current_block_async(
+                    network=settings.bt_network,
+                    subtensor=subtensor,
+                )
+                latest_eligible_interval_start = _latest_eligible_validation_interval_start(current_block)
+                next_interval_start = last_validated_interval_start + INTERVAL_LENGTH_BLOCKS
+                if latest_eligible_interval_start is not None:
+                    if next_interval_start > latest_eligible_interval_start:
+                        logger.info(
+                            "waiting for next interval to be eligible, current_block=%d, next_interval=(%d, %d)",
+                            current_block,
+                            next_interval_start,
+                            next_interval_start + INTERVAL_LENGTH_BLOCKS,
+                        )
+                        await _sleep_poll(poll_seconds)
+                        continue
+                    store_cache.clear()
+                    hotkeys, payload = await _fetch_hotkeys_with_commitments(
+                        settings=settings,
+                        manager=manager,
+                        blacklist_file=blacklist_file,
+                        exclude_hotkeys=exclude_hotkeys,
+                        subtensor=subtensor,
+                    )
+                    committed_payload.clear()
+                    committed_payload.update(payload)
+                    while next_interval_start <= latest_eligible_interval_start:
+                        if hotkeys:
+                            invalid_hotkeys_for_interval = set(
+                                await reporter.fetch_invalid_hotkeys(interval_id=next_interval_start)
+                            )
+                            global_record_index, _record_info_loaded = await _load_record_info_snapshot(
+                                record_info_store=record_info_read_store,
+                                object_key=settings.record_info_object_key,
+                                workdir=settings.workdir / "validator-source-auth",
+                            )
+                            decisions, _weights = await validator.validate_interval(
+                                candidate_hotkeys=hotkeys,
+                                interval_id=next_interval_start,
+                                workdir=settings.workdir / "validator-source-auth",
+                                global_record_index=global_record_index,
+                                invalid_hotkeys=invalid_hotkeys_for_interval,
+                            )
+                            invalid_hotkeys = sorted(
+                                {
+                                    decision.miner_hotkey
+                                    for decision in decisions
+                                    if any(
+                                        failure.startswith("source_frame_")
+                                        for failure in decision.failures
+                                    )
+                                }
+                            )
+                            if invalid_hotkeys:
+                                await reporter.post_invalid_hotkeys(
+                                    interval_id=next_interval_start,
+                                    invalid_hotkeys=invalid_hotkeys,
+                                )
+                                logger.info(
+                                    "source-auth invalid hotkeys posted interval=%s count=%d",
+                                    _interval_label(next_interval_start),
+                                    len(invalid_hotkeys),
+                                )
+                        last_validated_interval_start = next_interval_start
+                        next_interval_start += INTERVAL_LENGTH_BLOCKS
+            except Exception as exc:
+                logger.exception("source-auth validator loop iteration failed: %s", exc)
+            await _sleep_poll(poll_seconds)
+
+
+async def _run_owner_sync_worker_loop(
+    *,
+    settings: Settings,
+    poll_seconds: float,
+    manager: "ReadCredentialCommitmentManager",
+    store_cache: dict[str, HippiusS3Store],
+    committed_payload: dict[str, dict],
+    owner_db_store: HippiusS3Store,
+    record_info_read_store: HippiusS3Store,
+    store_for_hotkey: Callable[[str], HippiusS3Store],
+    blacklist_file: Path | None,
+    exclude_hotkeys: str,
+    spec_registry: DatasetSpecRegistry,
+) -> None:
+    async with _open_subtensor(settings.bt_network) as subtensor:
+        logger.info("owner dataset sync worker started poll_sec=%.1f", poll_seconds)
+        while True:
+            try:
+                store_cache.clear()
+                _hotkeys, payload = await _fetch_hotkeys_with_commitments(
+                    settings=settings,
+                    manager=manager,
+                    blacklist_file=blacklist_file,
+                    exclude_hotkeys=exclude_hotkeys,
+                    subtensor=subtensor,
+                )
+                committed_payload.clear()
+                committed_payload.update(payload)
+                summary = await _sync_record_info_to_owner_bucket(
+                    record_info_store=record_info_read_store,
+                    owner_store=owner_db_store,
+                    source_store_for_hotkey=store_for_hotkey,
+                    workdir=settings.workdir / "owner-sync-worker",
+                    spec_registry=spec_registry,
+                )
+                logger.info(
+                    "owner dataset sync iteration processed=%d copied=%d skipped=%d",
+                    summary["processed"],
+                    summary["copied"],
+                    summary["skipped"],
+                )
+            except Exception as exc:
+                logger.exception("owner dataset sync worker iteration failed: %s", exc)
             await _sleep_poll(poll_seconds)
 
 

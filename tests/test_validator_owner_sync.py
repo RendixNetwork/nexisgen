@@ -11,6 +11,7 @@ from nexis.validator.owner_sync import (
     merge_records_into_index,
     parse_record_info,
     serialize_record_info,
+    sync_record_info_to_owner_bucket_async,
     upload_record_info_snapshot_async,
     upload_validated_datasets_to_owner_bucket,
 )
@@ -30,8 +31,8 @@ def _row(clip_id: str, start: float) -> ClipRecord:
         split="train",
         clip_start_sec=start,
         duration_sec=5.0,
-        width=640,
-        height=360,
+        width=1280,
+        height=720,
         fps=30.0,
         num_frames=150,
         has_audio=True,
@@ -152,8 +153,8 @@ def test_owner_upload_publishes_validated_dataset_bundle(tmp_path: Path) -> None
     expected_prefix = tmp_path / "owner" / f"{interval_id}/{hotkey}"
     assert (expected_prefix / "dataset.parquet").exists()
     assert (expected_prefix / "manifest.json").exists()
-    assert (expected_prefix / "clips/c1.mp4").exists()
-    assert (expected_prefix / "frames/c1.jpg").exists()
+    assert not (expected_prefix / "clips/c1.mp4").exists()
+    assert not (expected_prefix / "frames/c1.jpg").exists()
     assert not (tmp_path / "work" / "owner-upload" / str(interval_id) / hotkey).exists()
 
     parsed_manifest = IntervalManifest.model_validate_json(
@@ -233,6 +234,60 @@ def test_owner_upload_skips_rows_with_missing_assets(tmp_path: Path) -> None:
     )
 
     expected_prefix = tmp_path / "owner" / f"{interval_id}/{hotkey}"
-    assert not (expected_prefix / "dataset.parquet").exists()
-    assert not (expected_prefix / "manifest.json").exists()
+    assert (expected_prefix / "dataset.parquet").exists()
+    assert (expected_prefix / "manifest.json").exists()
     assert not (tmp_path / "work" / "owner-upload" / str(interval_id) / hotkey).exists()
+
+
+def test_owner_sync_worker_copies_assets_to_owner_bucket(tmp_path: Path) -> None:
+    async def run_sync() -> None:
+        record_info_store = LocalObjectStore(tmp_path / "record-info")
+        owner_store = LocalObjectStore(tmp_path / "owner-db")
+        source_store = LocalObjectStore(tmp_path / "source")
+        interval_id = 92
+        hotkey = "miner1"
+        key_base = f"{interval_id}"
+
+        clip = tmp_path / "clip.mp4"
+        frame = tmp_path / "frame.jpg"
+        clip.write_bytes(b"clip")
+        frame.write_bytes(b"frame")
+        row = _row("c1", 0.0)
+        row.clip_sha256 = sha256_file(clip)
+        row.first_frame_sha256 = sha256_file(frame)
+        dataset = tmp_path / "dataset.parquet"
+        manifest = tmp_path / "manifest.json"
+        write_dataset_parquet([row], dataset)
+        write_manifest(
+            IntervalManifest(
+                netuid=1,
+                miner_hotkey=hotkey,
+                interval_id=interval_id,
+                record_count=1,
+                dataset_sha256=sha256_file(dataset),
+            ),
+            manifest,
+        )
+        # metadata bundle in record-info bucket
+        await record_info_store.upload_file(f"{key_base}/{hotkey}/dataset.parquet", dataset)
+        await record_info_store.upload_file(f"{key_base}/{hotkey}/manifest.json", manifest)
+        # original miner assets in source bucket
+        await source_store.upload_file(f"{key_base}/{row.clip_uri}", clip)
+        await source_store.upload_file(f"{key_base}/{row.first_frame_uri}", frame)
+
+        summary = await sync_record_info_to_owner_bucket_async(
+            record_info_store=record_info_store,
+            owner_store=owner_store,
+            source_store_for_hotkey=lambda _hotkey: source_store,
+            workdir=tmp_path / "work-sync",
+        )
+        assert summary["processed"] == 1
+        assert summary["copied"] == 1
+
+    run_async(run_sync())
+
+    expected_prefix = tmp_path / "owner-db" / "92/miner1"
+    assert (expected_prefix / "dataset.parquet").exists()
+    assert (expected_prefix / "manifest.json").exists()
+    assert (expected_prefix / "clips/c1.mp4").exists()
+    assert (expected_prefix / "frames/c1.jpg").exists()

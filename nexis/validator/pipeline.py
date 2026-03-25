@@ -11,6 +11,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Callable, Iterable, Protocol
 
 from ..hash_utils import sha256_file
@@ -67,6 +68,7 @@ class ValidatorPipeline:
         weight_computer: WeightComputer | None = None,
         caption_semantic_checker: CaptionSemanticCheckerLike | None = None,
         source_authenticity_enabled: bool = False,
+        source_auth_only: bool = False,
         spec_registry: DatasetSpecRegistry | None = None,
         enabled_specs: list[str] | None = None,
     ):
@@ -74,6 +76,7 @@ class ValidatorPipeline:
         self.weight_computer = weight_computer or WeightComputer()
         self._caption_semantic_checker = caption_semantic_checker
         self._source_authenticity_enabled = source_authenticity_enabled
+        self._source_auth_only = source_auth_only
         self._spec_registry = spec_registry or DatasetSpecRegistry.with_defaults()
         if enabled_specs:
             self._enabled_specs = {item.strip() for item in enabled_specs if item.strip()}
@@ -111,23 +114,23 @@ class ValidatorPipeline:
         interval_seed: str | None = None,
         workdir: Path | None = None,
         global_record_index: dict[str, list[float]] | None = None,
+        invalid_hotkeys: set[str] | None = None,
     ) -> tuple[list[ValidationDecision], dict[str, float]]:
         interval_seed = interval_seed or self._default_interval_seed(interval_id)
+        invalid_hotkey_set = set(invalid_hotkeys or set())
         eligible_hotkeys = [
             hotkey
             for hotkey in candidate_hotkeys
-            if not self.weight_computer.has_recent_failure(hotkey)
+            if hotkey not in invalid_hotkey_set
         ]
-        if not eligible_hotkeys:
-            self.weight_computer.update_failure_history({})
         sampled_hotkeys = select_miners(eligible_hotkeys, interval_seed)
         selected = list(sampled_hotkeys)
-        rejected_from_history = [hotkey for hotkey in candidate_hotkeys if hotkey not in eligible_hotkeys]
+        rejected_from_invalids = [hotkey for hotkey in candidate_hotkeys if hotkey not in eligible_hotkeys]
         logger.info(
-            "selected %d miners from %d candidates (%d excluded by failure history)",
+            "selected %d miners from %d candidates (%d excluded by API invalid list)",
             len(selected),
             len(candidate_hotkeys),
-            len(rejected_from_history),
+            len(rejected_from_invalids),
         )
         logger.debug(
             "validator interval_seed=%s eligible_hotkeys=%s sampled_hotkeys=%s selected_hotkeys=%s",
@@ -198,7 +201,6 @@ class ValidatorPipeline:
                 manifests_by_hotkey={entry.hotkey: entry.manifest for entry in loaded_submissions},
             )
 
-            self.weight_computer.update_failure_history(acceptance_map)
             weights = self.weight_computer.compute_weights(scores)
             logger.debug("computed weights interval=%d entries=%d", interval_id, len(weights))
             return decisions, weights
@@ -429,31 +431,43 @@ class ValidatorPipeline:
                 len(sampled),
             )
 
-            # Full-record hard checks run across the complete interval payload.
-            check_result = spec.run_hard_checks(records)
+            if self._source_auth_only:
+                check_result = spec.run_hard_checks([])
+            else:
+                # Full-record hard checks run across the complete interval payload.
+                check_result = spec.run_hard_checks(records)
             semantic_frames: dict[str, list[Path]] = {}
             frame_paths: dict[str, Path] = {}
-            verifier = spec.build_asset_verifier()
-            if verifier is not None:
-                asset_result = await verifier.verify(
+            if self._source_auth_only:
+                frame_paths = await self._download_sampled_source_auth_frames(
                     store=loaded.store,
                     key_base=loaded.key_base,
                     sampled=sampled,
-                    miner_dir=loaded.miner_dir / "assets",
+                    miner_dir=loaded.miner_dir / "source-auth-frames",
                 )
-                check_result.failures.extend(asset_result.failures)
-                semantic_frames = asset_result.semantic_frames_by_clip_id
-                frame_paths = asset_result.first_frames_by_clip_id
+            else:
+                verifier = spec.build_asset_verifier()
+                if verifier is not None:
+                    asset_result = await verifier.verify(
+                        store=loaded.store,
+                        key_base=loaded.key_base,
+                        sampled=sampled,
+                        miner_dir=loaded.miner_dir / "assets",
+                    )
+                    check_result.failures.extend(asset_result.failures)
+                    semantic_frames = asset_result.semantic_frames_by_clip_id
+                    frame_paths = asset_result.first_frames_by_clip_id
 
-            if self._source_authenticity_enabled:
+            if self._source_authenticity_enabled and self._source_auth_only:
                 source_failures = self._check_source_authenticity(
                     sampled=sampled,
                     frame_paths_by_clip_id=frame_paths,
                     source_cache_dir=loaded.miner_dir / "source_cache",
+                    fail_open_on_error=True,
                 )
                 check_result.failures.extend(source_failures)
 
-            if self._caption_semantic_checker is not None:
+            if self._caption_semantic_checker is not None and not self._source_auth_only:
                 semantic_failures = self._caption_semantic_checker.check(
                     sampled=sampled,
                     frame_paths_by_clip_id=semantic_frames,
@@ -611,6 +625,7 @@ class ValidatorPipeline:
         sampled: list[ClipRecord],
         frame_paths_by_clip_id: dict[str, Path],
         source_cache_dir: Path,
+        fail_open_on_error: bool,
     ) -> list[str]:
         failures: list[str] = []
         checked = 0
@@ -622,27 +637,64 @@ class ValidatorPipeline:
             if validator_frame is None or not validator_frame.exists():
                 continue
             checked += 1
-            # try:
-            source_video = source_video_cache.get(row.source_video_url)
-            if source_video is None:
-                source_video = download_youtube_video(
-                    row.source_video_url,
-                    source_cache_dir / "raw",
+            try:
+                source_video = source_video_cache.get(row.source_video_url)
+                if source_video is None:
+                    source_video = download_youtube_video(
+                        row.source_video_url,
+                        source_cache_dir / "raw",
+                    )
+                    source_video_cache[row.source_video_url] = source_video
+                source_frame = source_cache_dir / "frames" / f"{row.clip_id}.jpg"
+                self._extract_source_frame(
+                    source_video=source_video,
+                    second=max(0.0, row.clip_start_sec),
+                    target=source_frame,
                 )
-                source_video_cache[row.source_video_url] = source_video
-            source_frame = source_cache_dir / "frames" / f"{row.clip_id}.jpg"
-            self._extract_source_frame(
-                source_video=source_video,
-                second=max(0.0, row.clip_start_sec),
-                target=source_frame,
-            )
-            if not self._frames_are_similar(validator_frame, source_frame):
-                failures.append(f"source_frame_mismatch:{row.clip_id}")
-                break
-            # except Exception:
-            #     failures.append(f"source_frame_validation_error:{row.clip_id}")
-            #     break
+                if not self._frames_are_similar(validator_frame, source_frame):
+                    failures.append(f"source_frame_mismatch:{row.clip_id}")
+                    break
+            except Exception as exc:
+                if not fail_open_on_error:
+                    failures.append(f"source_frame_validation_error:{row.clip_id}")
+                    break
+                logger.warning(
+                    "source auth check fail-open clip_id=%s error=%s",
+                    row.clip_id,
+                    exc,
+                )
         return failures
+
+    async def _download_sampled_source_auth_frames(
+        self,
+        *,
+        store: Any,
+        key_base: str,
+        sampled: list[ClipRecord],
+        miner_dir: Path,
+    ) -> dict[str, Path]:
+        frames_by_clip_id: dict[str, Path] = {}
+        for row in sampled:
+            safe_uri = self._normalize_relative_uri(row.first_frame_uri)
+            if safe_uri is None:
+                continue
+            frame_path = miner_dir / safe_uri
+            ok = await store.download_file(f"{key_base}/{safe_uri}", frame_path)
+            if not ok:
+                continue
+            if sha256_file(frame_path) != row.first_frame_sha256:
+                continue
+            frames_by_clip_id[row.clip_id] = frame_path
+        return frames_by_clip_id
+
+    def _normalize_relative_uri(self, value: str) -> str | None:
+        text = value.strip().lstrip("/")
+        if not text:
+            return None
+        parts = PurePosixPath(text).parts
+        if any(part in {"", ".", ".."} for part in parts):
+            return None
+        return "/".join(parts)
 
     def _extract_source_frame(self, *, source_video: Path, second: float, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)

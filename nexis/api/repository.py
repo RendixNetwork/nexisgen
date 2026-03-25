@@ -64,6 +64,14 @@ class ValidationEvidenceRepository:
                 ON validator_request_nonces (received_at)
             """
         )
+        await self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS interval_invalid_hotkeys (
+                interval_id BIGINT PRIMARY KEY,
+                invalid_hotkeys TEXT[] NOT NULL
+            )
+            """
+        )
 
     async def register_nonce_once(
         self,
@@ -150,14 +158,92 @@ class ValidationEvidenceRepository:
                     $11, $12
                 )
                 ON CONFLICT (validator_hotkey, interval_id, miner_hotkey)
-                DO NOTHING
+                DO UPDATE SET
+                    accepted = EXCLUDED.accepted,
+                    failure_reasons = EXCLUDED.failure_reasons,
+                    record_count = EXCLUDED.record_count,
+                    global_overlap_pruned_count = EXCLUDED.global_overlap_pruned_count,
+                    cross_miner_overlap_pruned_count = EXCLUDED.cross_miner_overlap_pruned_count,
+                    signature = EXCLUDED.signature,
+                    signature_timestamp = EXCLUDED.signature_timestamp,
+                    signature_nonce = EXCLUDED.signature_nonce,
+                    body_sha256 = EXCLUDED.body_sha256,
+                    received_at = NOW()
                 RETURNING 1
                 """,
                 *args,
             )
             if result == 1:
                 inserted += 1
+        invalid_hotkeys = sorted(
+            {
+                decision.miner_hotkey.strip()
+                for decision in decisions
+                if not decision.accepted and decision.miner_hotkey.strip()
+            }
+        )
+        if invalid_hotkeys:
+            await self.upsert_interval_invalid_hotkeys(
+                interval_id=interval_id,
+                invalid_hotkeys=invalid_hotkeys,
+            )
         return inserted
+
+    async def upsert_interval_invalid_hotkeys(
+        self,
+        *,
+        interval_id: int,
+        invalid_hotkeys: list[str],
+    ) -> None:
+        values = sorted({item.strip() for item in invalid_hotkeys if item.strip()})
+        if not values:
+            return
+        await self._db.execute(
+            """
+            INSERT INTO interval_invalid_hotkeys (
+                interval_id,
+                invalid_hotkeys
+            )
+            VALUES ($1, $2::TEXT[])
+            ON CONFLICT (interval_id)
+            DO UPDATE SET
+                invalid_hotkeys = (
+                    SELECT ARRAY(
+                        SELECT DISTINCT item
+                        FROM unnest(
+                            interval_invalid_hotkeys.invalid_hotkeys || EXCLUDED.invalid_hotkeys
+                        ) AS item
+                        ORDER BY item
+                    )
+                )
+            """,
+            int(interval_id),
+            values,
+        )
+
+    async def get_invalid_hotkeys_in_interval_range(
+        self,
+        *,
+        start_interval_id: int,
+        end_interval_id: int,
+    ) -> list[str]:
+        rows = await self._db.fetch(
+            """
+            SELECT invalid_hotkeys
+            FROM interval_invalid_hotkeys
+            WHERE interval_id >= $1
+              AND interval_id <= $2
+            """,
+            int(start_interval_id),
+            int(end_interval_id),
+        )
+        merged: set[str] = set()
+        for row in rows:
+            for item in row["invalid_hotkeys"] or []:
+                hotkey = str(item).strip()
+                if hotkey:
+                    merged.add(hotkey)
+        return sorted(merged)
 
     async def get_interval_decisions(
         self,

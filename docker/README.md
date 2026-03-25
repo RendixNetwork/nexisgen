@@ -11,7 +11,9 @@ This directory contains a minimal validator deployment with:
 
 - `Dockerfile.validator`: validator image build file
 - `healthcheck_validator.py`: container health check script
-- `docker-compose.validator.yml`: validator + watchtower stack
+- `docker-compose.validator.yml`: main validator + watchtower stack
+- `docker-compose.source-auth-validator.yml`: optional source-auth validator stack
+- `docker-compose.owner-sync-worker.yml`: optional owner dataset sync worker stack
 - `validator.env.example`: validator runtime environment template
 - `compose.env.example`: host/compose environment template
 
@@ -40,6 +42,18 @@ Start validator + watchtower:
 
 ```bash
 docker compose --env-file compose.env -f docker-compose.validator.yml up -d
+```
+
+Start source-auth validator (optional):
+
+```bash
+docker compose --env-file compose.env -f docker-compose.source-auth-validator.yml up -d
+```
+
+Start owner sync worker (optional):
+
+```bash
+docker compose --env-file compose.env -f docker-compose.owner-sync-worker.yml up -d
 ```
 
 Check logs:

@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Protocol
 
 from ..hash_utils import sha256_file
-from ..miner.youtube import extract_caption_frames
+from ..miner.youtube import extract_caption_frames, probe_video
 from ..models import ClipRecord
 
 _SEMANTIC_FRAME_COUNT = 6
+_REQUIRED_CLIP_WIDTH = 1280
+_REQUIRED_CLIP_HEIGHT = 720
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -60,6 +64,13 @@ class VideoAssetVerifier:
             )
             if clip_asset_failure:
                 failures.append(clip_asset_failure)
+            else:
+                resolution_failure = self._verify_resolution(
+                    row=row,
+                    clip_path=clip_path,
+                )
+                if resolution_failure is not None:
+                    failures.append(resolution_failure)
 
             frame_asset_failure = await self._verify_asset(
                 store=store,
@@ -95,6 +106,32 @@ class VideoAssetVerifier:
             semantic_frames_by_clip_id=semantic_frames_by_clip_id,
             first_frames_by_clip_id=first_frames_by_clip_id,
         )
+
+    def _verify_resolution(self, *, row: ClipRecord, clip_path: Path) -> str | None:
+        width = row.width
+        height = row.height
+        try:
+            probe = probe_video(clip_path)
+            video_stream = next(
+                (
+                    stream
+                    for stream in probe.get("streams", [])
+                    if str(stream.get("codec_type", "")).lower() == "video"
+                ),
+                {},
+            )
+            width = int(video_stream.get("width", width))
+            height = int(video_stream.get("height", height))
+        except Exception as exc:
+            # Fail closed using schema values when ffprobe cannot inspect the clip.
+            logger.warning(
+                "clip resolution probe failed; using row metadata clip_id=%s error=%s",
+                row.clip_id,
+                exc,
+            )
+        if width == _REQUIRED_CLIP_WIDTH and height == _REQUIRED_CLIP_HEIGHT:
+            return None
+        return f"invalid_resolution:{row.clip_id}:{width}x{height}"
 
     async def _verify_asset(
         self,
