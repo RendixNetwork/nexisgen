@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from nexis.storage.hippius import HippiusCredentials
+from nexis.storage.r2 import R2Credentials
 from .helpers import LocalObjectStore, run_async
 
 
@@ -25,28 +25,39 @@ def test_local_store_upload_download(tmp_path: Path) -> None:
     run_async(run())
 
 
-def test_hippius_credentials_bucket_name_validation_is_not_hotkey_bound() -> None:
-    creds = HippiusCredentials(
-        bucket_name="custom-bucket",
-        endpoint_url="https://s3.hippius.com",
-        region="decentralized",
-        read_access_key="ak",
-        read_secret_key="sk",
-        write_access_key="wk",
-        write_secret_key="ws",
+def test_r2_credentials_bucket_name_validation_matches_lowercase_hotkey() -> None:
+    hotkey = "5F4fAnX"
+    creds = R2Credentials(
+        account_id="a" * 32,
+        bucket_name=hotkey.lower(),
+        region="auto",
+        read_access_key="k" * 32,
+        read_secret_key="s" * 64,
+        write_access_key="k" * 32,
+        write_secret_key="s" * 64,
     )
     creds.validate_bucket_name()
-    # Backward-compatible method should no longer enforce hotkey equality.
-    creds.validate_bucket_for_hotkey("different-hotkey")
+    creds.validate_bucket_for_hotkey(hotkey)
 
     with pytest.raises(ValueError):
-        HippiusCredentials(
+        R2Credentials(
+            account_id="a" * 32,
             bucket_name="",
-            endpoint_url="https://s3.hippius.com",
-            region="decentralized",
-            read_access_key="ak",
-            read_secret_key="sk",
-            write_access_key="wk",
-            write_secret_key="ws",
+            region="auto",
+            read_access_key="k" * 32,
+            read_secret_key="s" * 64,
+            write_access_key="k" * 32,
+            write_secret_key="s" * 64,
         ).validate_bucket_name()
+
+    with pytest.raises(ValueError):
+        R2Credentials(
+            account_id="a" * 32,
+            bucket_name="other-bucket",
+            region="auto",
+            read_access_key="k" * 32,
+            read_secret_key="s" * 64,
+            write_access_key="k" * 32,
+            write_secret_key="s" * 64,
+        ).validate_bucket_for_hotkey(hotkey)
 

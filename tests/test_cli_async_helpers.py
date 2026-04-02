@@ -97,8 +97,8 @@ def test_fetch_hotkeys_with_commitments_filters_excluded_and_missing(
         async def get_all_credentials_async(self, subtensor: object) -> dict[str, dict]:
             assert subtensor is fake_subtensor
             return {
-                "hk1": {"bucket_name": "b1"},
-                "hk3": {"bucket_name": "b3"},
+                "hk1": {"account_id": "a" * 32},
+                "hk3": {"account_id": "b" * 32},
             }
 
     settings = Settings()
@@ -219,7 +219,6 @@ def test_run_validator_loop_submits_epoch_weights_with_shared_subtensor(
                 committed_payload={},
                 validator=FakeValidator(),  # type: ignore[arg-type]
                 is_owner_validator=False,
-                owner_db_store=None,
                 record_info_read_store=None,
                 record_info_write_store=None,
                 store_for_hotkey=lambda _hotkey: LocalObjectStore(tmp_path / "unused"),  # type: ignore[return-value]
@@ -314,7 +313,7 @@ def test_run_validator_loop_reports_interval_results(monkeypatch, tmp_path) -> N
 
     async def fake_fetch_hotkeys_with_commitments(**kwargs) -> tuple[list[str], dict[str, dict]]:  # type: ignore[no-untyped-def]
         assert kwargs["subtensor"] is fake_subtensor
-        return ["miner-1"], {"miner-1": {"bucket_name": "x"}}
+        return ["miner-1"], {"miner-1": {"account_id": "a" * 32}}
 
     async def fake_sleep_poll(seconds: float) -> None:
         _ = seconds
@@ -377,7 +376,6 @@ def test_run_validator_loop_reports_interval_results(monkeypatch, tmp_path) -> N
                 committed_payload={},
                 validator=FakeValidator(),  # type: ignore[arg-type]
                 is_owner_validator=False,
-                owner_db_store=None,
                 record_info_read_store=None,
                 record_info_write_store=None,
                 store_for_hotkey=lambda _hotkey: LocalObjectStore(tmp_path / "unused"),  # type: ignore[return-value]

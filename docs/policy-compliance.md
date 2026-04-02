@@ -16,12 +16,12 @@ Key implications:
 - keep clear provenance metadata for every clip
 - maintain an operator review gate for disputed content
 
-## Hippius
+## Cloudflare R2
 
 Use dedicated access keys and rotate credentials regularly.
 
 References:
 
-- https://docs.hippius.com/cli/usage
-- https://docs.hippius.com/storage/s3/integration
+- https://developers.cloudflare.com/r2/get-started/s3/
+- https://developers.cloudflare.com/r2/buckets/
 

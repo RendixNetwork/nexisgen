@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-import base64
 from collections.abc import AsyncIterator
 import logging
 from pathlib import Path
 from typing import Any
 
 from .metagraph import _open_subtensor, _resolve_maybe_awaitable, _run_async
-from ..storage.hippius import HippiusCredentials
+from ..storage.r2 import R2Credentials, bucket_name_for_hotkey, is_valid_r2_account_id
 
 logger = logging.getLogger(__name__)
-_COMMITMENT_PREFIX = "nexis"
+
+_R2_ACCOUNT_ID_LEN = 32
+_R2_READ_ACCESS_KEY_LEN = 32
+_R2_READ_SECRET_KEY_LEN = 64
+_R2_COMMITMENT_PAYLOAD_LEN = _R2_ACCOUNT_ID_LEN + _R2_READ_ACCESS_KEY_LEN + _R2_READ_SECRET_KEY_LEN
 
 
 class ReadCredentialCommitmentManager:
@@ -26,38 +29,38 @@ class ReadCredentialCommitmentManager:
         wallet_name: str,
         wallet_hotkey: str,
         wallet_path: Path,
-        hippius_endpoint_url: str,
-        hippius_region: str,
+        r2_region: str,
     ):
         self.netuid = netuid
         self.network = network
         self.wallet_name = wallet_name
         self.wallet_hotkey = wallet_hotkey
         self.wallet_path = wallet_path
-        self.hippius_endpoint_url = hippius_endpoint_url
-        self.hippius_region = hippius_region
+        self.r2_region = r2_region
 
-    def commit_read_credentials(self, hotkey: str, credentials: HippiusCredentials) -> str:
+    def commit_read_credentials(self, hotkey: str, credentials: R2Credentials) -> str:
         return _run_async(self.commit_read_credentials_async(hotkey, credentials))
 
     async def commit_read_credentials_async(
         self,
         hotkey: str,
-        credentials: HippiusCredentials,
+        credentials: R2Credentials,
         subtensor: Any | None = None,
     ) -> str:
         import bittensor as bt
 
-        credentials.validate_bucket_name()
+        credentials.validate_account_id()
+        credentials.validate_read_key_lengths()
+        credentials.validate_bucket_for_hotkey(hotkey)
         commitment_payload = self._encode_payload(
-            bucket_name=credentials.bucket_name,
+            account_id=credentials.account_id,
             read_access_key=credentials.read_access_key,
             read_secret_key=credentials.read_secret_key,
         )
-        if len(commitment_payload) > 128:
+        if len(commitment_payload) != _R2_COMMITMENT_PAYLOAD_LEN:
             raise ValueError(
-                f"commitment payload too long ({len(commitment_payload)} chars); "
-                "shorter read credentials are required"
+                f"invalid commitment payload length ({len(commitment_payload)}), "
+                f"expected {_R2_COMMITMENT_PAYLOAD_LEN}"
             )
 
         if subtensor is None:
@@ -114,9 +117,7 @@ class ReadCredentialCommitmentManager:
                 if decoded is None:
                     continue
                 commitments[hotkey] = {
-                    "bucket_name": decoded["bucket_name"],
-                    "endpoint_url": self.hippius_endpoint_url,
-                    "region": self.hippius_region,
+                    "account_id": decoded["account_id"],
                     "read_access_key": decoded["read_access_key"],
                     "read_secret_key": decoded["read_secret_key"],
                     "commitment": commitment_str,
@@ -125,61 +126,49 @@ class ReadCredentialCommitmentManager:
             logger.warning("failed to fetch chain commitments: %s", exc)
         return commitments
 
-    def build_hippius_credentials(
+    def build_r2_credentials(
         self,
         committed: dict | None,
-    ) -> HippiusCredentials | None:
+        *,
+        hotkey: str,
+    ) -> R2Credentials | None:
         if committed is None:
             return None
-        bucket_name = str(committed.get("bucket_name", "")).strip()
+        account_id = str(committed.get("account_id", "")).strip()
         read_access_key = str(committed.get("read_access_key", "")).strip()
         read_secret_key = str(committed.get("read_secret_key", "")).strip()
-        if not bucket_name or not read_access_key or not read_secret_key:
+        if not account_id or not read_access_key or not read_secret_key:
             return None
-        # Validator path is read-only; write fields mirror read keys for compatibility.
-        return HippiusCredentials(
-            bucket_name=bucket_name,
-            endpoint_url=self.hippius_endpoint_url,
-            region=self.hippius_region,
+        return R2Credentials(
+            account_id=account_id,
+            bucket_name=bucket_name_for_hotkey(hotkey),
+            region=self.r2_region,
             read_access_key=read_access_key,
             read_secret_key=read_secret_key,
             write_access_key=read_access_key,
             write_secret_key=read_secret_key,
         )
 
-    def _encode_payload(self, *, bucket_name: str, read_access_key: str, read_secret_key: str) -> str:
-        bucket = self._b64encode(bucket_name)
-        key = self._b64encode(read_access_key)
-        secret = self._b64encode(read_secret_key)
-        return f"{_COMMITMENT_PREFIX}|{bucket}|{key}|{secret}"
+    def _encode_payload(self, *, account_id: str, read_access_key: str, read_secret_key: str) -> str:
+        return f"{account_id}{read_access_key}{read_secret_key}"
 
     def _decode_payload(self, payload: str) -> dict[str, str] | None:
-        if payload.startswith(f"{_COMMITMENT_PREFIX}|"):
-            parts = payload.split("|", 3)
-            if len(parts) != 4:
-                return None
-            bucket_name = self._b64decode(parts[1])
-            read_access_key = self._b64decode(parts[2])
-            read_secret_key = self._b64decode(parts[3])
-            if bucket_name is None or read_access_key is None or read_secret_key is None:
-                return None
-            return {
-                "bucket_name": bucket_name,
-                "read_access_key": read_access_key,
-                "read_secret_key": read_secret_key,
-            }
-        else:
+        if len(payload) != _R2_COMMITMENT_PAYLOAD_LEN:
             return None
-
-    def _b64encode(self, value: str) -> str:
-        return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
-
-    def _b64decode(self, value: str) -> str | None:
-        try:
-            padded = value + ("=" * (-len(value) % 4))
-            return base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
-        except Exception:
+        account_id = payload[:_R2_ACCOUNT_ID_LEN]
+        read_access_key = payload[_R2_ACCOUNT_ID_LEN : _R2_ACCOUNT_ID_LEN + _R2_READ_ACCESS_KEY_LEN]
+        read_secret_key = payload[-_R2_READ_SECRET_KEY_LEN:]
+        if not account_id or not read_access_key or not read_secret_key:
             return None
+        if not is_valid_r2_account_id(account_id):
+            return None
+        if any(ch.isspace() for ch in read_access_key) or any(ch.isspace() for ch in read_secret_key):
+            return None
+        return {
+            "account_id": account_id.lower(),
+            "read_access_key": read_access_key,
+            "read_secret_key": read_secret_key,
+        }
 
     def _decode_hotkey(self, key: Any) -> str | None:
         try:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from nexis.chain.credentials import ReadCredentialCommitmentManager
-from nexis.storage.hippius import HippiusCredentials
+from nexis.storage.r2 import R2Credentials, build_r2_endpoint_url
 from .helpers import patch_bittensor_wallet, run_async
 
 
@@ -14,62 +14,63 @@ def _manager() -> ReadCredentialCommitmentManager:
         wallet_name="w",
         wallet_hotkey="h",
         wallet_path=Path("~/.bittensor/wallets"),
-        hippius_endpoint_url="https://s3.hippius.com",
-        hippius_region="decentralized",
+        r2_region="auto",
     )
 
 
-def test_payload_v2_roundtrip_includes_bucket_name() -> None:
+def test_payload_v3_roundtrip_includes_r2_account_and_keys() -> None:
     manager = _manager()
     payload = manager._encode_payload(  # type: ignore[attr-defined]
-        bucket_name="my-custom-bucket",
-        read_access_key="read-ak",
-        read_secret_key="read-sk",
+        account_id="a" * 32,
+        read_access_key="k" * 32,
+        read_secret_key="s" * 64,
     )
     decoded = manager._decode_payload(payload)  # type: ignore[attr-defined]
     assert decoded is not None
-    assert decoded["bucket_name"] == "my-custom-bucket"
-    assert decoded["read_access_key"] == "read-ak"
-    assert decoded["read_secret_key"] == "read-sk"
+    assert len(payload) == 128
+    assert decoded["account_id"] == "a" * 32
+    assert decoded["read_access_key"] == "k" * 32
+    assert decoded["read_secret_key"] == "s" * 64
 
 
 def test_invalid_payload_decode_returns_none() -> None:
     manager = _manager()
-    v1_payload = "nexis1|cmVhZC1haw|cmVhZC1zaw"
-    decoded = manager._decode_payload(v1_payload)  # type: ignore[attr-defined]
+    decoded = manager._decode_payload("too-short")  # type: ignore[attr-defined]
     assert decoded is None
 
 
-def test_build_credentials_uses_committed_bucket_name() -> None:
+def test_build_credentials_derives_bucket_from_hotkey() -> None:
     manager = _manager()
+    hotkey = "5AbCdEf"
     committed = {
-        "bucket_name": "team-bucket-42",
-        "read_access_key": "ak",
-        "read_secret_key": "sk",
+        "account_id": "f" * 32,
+        "read_access_key": "k" * 32,
+        "read_secret_key": "s" * 64,
     }
-    creds = manager.build_hippius_credentials(committed)
+    creds = manager.build_r2_credentials(committed, hotkey=hotkey)
     assert creds is not None
-    assert creds.bucket_name == "team-bucket-42"
-    assert creds.write_access_key == "ak"
-    assert creds.write_secret_key == "sk"
+    assert creds.bucket_name == hotkey.lower()
+    assert creds.write_access_key == committed["read_access_key"]
+    assert creds.write_secret_key == committed["read_secret_key"]
+    assert creds.endpoint_url == build_r2_endpoint_url(committed["account_id"])
 
 
-def test_build_credentials_requires_bucket_name() -> None:
+def test_build_credentials_requires_account_id() -> None:
     manager = _manager()
     committed = {
-        "bucket_name": "",
-        "read_access_key": "ak",
-        "read_secret_key": "sk",
+        "account_id": "",
+        "read_access_key": "k" * 32,
+        "read_secret_key": "s" * 64,
     }
-    assert manager.build_hippius_credentials(committed) is None
+    assert manager.build_r2_credentials(committed, hotkey="hk1") is None
 
 
 def test_get_all_credentials_async_uses_provided_subtensor() -> None:
     manager = _manager()
     payload = manager._encode_payload(  # type: ignore[attr-defined]
-        bucket_name="bucket-1",
-        read_access_key="ak",
-        read_secret_key="sk",
+        account_id="a" * 32,
+        read_access_key="k" * 32,
+        read_secret_key="s" * 64,
     )
 
     manager._decode_hotkey = lambda key: str(key[0])  # type: ignore[method-assign]
@@ -86,9 +87,9 @@ def test_get_all_credentials_async_uses_provided_subtensor() -> None:
 
     committed = run_async(manager.get_all_credentials_async(subtensor=FakeSubtensor()))
     assert "hk1" in committed
-    assert committed["hk1"]["bucket_name"] == "bucket-1"
-    assert committed["hk1"]["read_access_key"] == "ak"
-    assert committed["hk1"]["read_secret_key"] == "sk"
+    assert committed["hk1"]["account_id"] == "a" * 32
+    assert committed["hk1"]["read_access_key"] == "k" * 32
+    assert committed["hk1"]["read_secret_key"] == "s" * 64
 
 
 def test_commit_read_credentials_async_uses_provided_subtensor(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -100,14 +101,14 @@ def test_commit_read_credentials_async_uses_provided_subtensor(monkeypatch) -> N
         async def commit(self, wallet: object, netuid: int, payload: str) -> None:
             commit_calls.append((wallet, netuid, payload))
 
-    creds = HippiusCredentials(
-        bucket_name="bucket-2",
-        endpoint_url="https://s3.example.com",
-        region="region-1",
-        read_access_key="read-ak",
-        read_secret_key="read-sk",
-        write_access_key="write-ak",
-        write_secret_key="write-sk",
+    creds = R2Credentials(
+        account_id="f" * 32,
+        bucket_name="hk-test",
+        region="auto",
+        read_access_key="k" * 32,
+        read_secret_key="s" * 64,
+        write_access_key="w" * 32,
+        write_secret_key="x" * 64,
     )
 
     result = run_async(

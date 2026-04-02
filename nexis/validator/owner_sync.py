@@ -1,4 +1,4 @@
-"""Owner validator sync helpers for shared Hippius buckets."""
+"""Owner validator sync helpers for shared Cloudflare R2 buckets."""
 
 from __future__ import annotations
 
@@ -160,7 +160,7 @@ def merge_records_into_index(
     records: list[ClipRecord],
 ) -> None:
     for row in records:
-        source_url = row.source_video_url
+        source_url = canonical_source_key_from_url(row.source_video_url)
         values = record_index.setdefault(source_url, [])
         values.append(float(row.clip_start_sec))
     for source_url, values in record_index.items():

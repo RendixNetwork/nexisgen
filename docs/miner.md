@@ -5,16 +5,20 @@
 - `BT_WALLET_NAME`
 - `BT_WALLET_HOTKEY`
 - `BT_WALLET_PATH`
-- `HIPPIUS_BUCKET`
-- `HIPPIUS_READ_ACCESS_KEY`
-- `HIPPIUS_READ_SECRET_KEY`
-- `HIPPIUS_WRITE_ACCESS_KEY`
-- `HIPPIUS_WRITE_SECRET_KEY`
+- `R2_ACCOUNT_ID`
+- `R2_REGION`
+- `R2_READ_ACCESS_KEY`
+- `R2_READ_SECRET_KEY`
+- `R2_WRITE_ACCESS_KEY`
+- `R2_WRITE_SECRET_KEY`
 - `NEXIS_SOURCES_FILE`
 - `NEXIS_BLOCK_POLL_SEC` (optional, default: `6`)
 - `TARGET_RESOLUTION` (optional, default: `720`)
 - `NEXIS_DATASET_SPEC_DEFAULT` (optional, default: `video_v1`)
 - `NEXIS_MINER_ENABLED_SPECS` (optional, CSV, default: `video_v1`)
+
+Miner bucket naming is deterministic and does not require a config value:
+`bucket_name = lowercase(BT_WALLET_HOTKEY address)`.
 
 ## Required System Tools
 

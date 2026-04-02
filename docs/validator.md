@@ -41,12 +41,13 @@ docker inspect --format '{{index .RepoDigests 0}}' nexis-validator
 - `BT_WALLET_NAME`
 - `BT_WALLET_HOTKEY`
 - `BT_WALLET_PATH`
-- `HIPPIUS_S3_ENDPOINT`
-- `HIPPIUS_S3_REGION`
+- `R2_ACCOUNT_ID`
+- `R2_REGION`
 - `NEXIS_BLOCK_POLL_SEC`
 - `NEXIS_WORKDIR`
 - `NEXIS_VALIDATOR_BLACKLIST_FILE`
 - `NEXIS_RECORD_INFO_BUCKET`
+- `NEXIS_RECORD_INFO_ACCOUNT_ID`
 - `NEXIS_RECORD_INFO_READ_ACCESS_KEY`
 - `NEXIS_RECORD_INFO_READ_SECRET_KEY`
 
@@ -67,6 +68,7 @@ docker inspect --format '{{index .RepoDigests 0}}' nexis-validator
 
 - `NEXIS_OWNER_VALIDATOR_HOTKEY`
 - `NEXIS_OWNER_DB_BUCKET`
+- `NEXIS_OWNER_DB_ACCOUNT_ID`
 - `NEXIS_OWNER_DB_READ_ACCESS_KEY`
 - `NEXIS_OWNER_DB_READ_SECRET_KEY`
 - `NEXIS_OWNER_DB_WRITE_ACCESS_KEY`
@@ -122,8 +124,9 @@ nexis sync-owner-datasets --poll-sec 60
   - verify `BT_WALLET_HOST_PATH` in `compose.env` points to the host wallet directory
   - ensure `BT_WALLET_PATH=/wallets` in `validator.env` matches compose mount target
 - S3 credential failures:
+  - confirm `R2_ACCOUNT_ID` and `R2_REGION`
   - confirm `NEXIS_RECORD_INFO_*` and (owner mode) `NEXIS_OWNER_DB_*` values
-  - confirm endpoint and region (`HIPPIUS_S3_ENDPOINT`, `HIPPIUS_S3_REGION`)
+  - confirm miners committed valid `account_id + read credentials`
 - LLM provider behavior:
   - validator semantic checks use OpenAI (`gpt-4o`) when `OPENAI_API_KEY` is set
   - if OpenAI is unset but `GEMINI_API_KEY` is set, checks use Gemini (`gemini-3.1-flash-lite-preview`)

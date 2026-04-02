@@ -37,7 +37,7 @@ Nexisgen runs on fixed block intervals:
 At a high level:
 
 1. Miner generates `dataset.parquet` + `manifest.json` for an interval.
-2. Miner uploads package to storage (Hippius S3).
+2. Miner uploads package to storage (Cloudflare R2 via S3 API).
 3. Validator discovers miners with committed read credentials.
 4. Validator downloads each miner interval package and validates it.
 5. Validator accepts/rejects each miner interval and computes scores/weights.
@@ -88,7 +88,7 @@ Install these before running miner or validator:
 
 - Python `>=3.10,<3.13`
 - access to Bittensor wallet files
-- Hippius S3 credentials (bucket + read/write keys)
+- Cloudflare R2 credentials (account id + read/write keys)
 
 ### For Docker validator deployment
 
@@ -111,7 +111,9 @@ Edit `.env` and fill required values before running commands.
 
 ### 1) Configure miner `.env`
 
-At minimum, set wallet, Hippius bucket credentials, and source file path.
+At minimum, set wallet, Cloudflare R2 credentials, and source file path.
+Shared buckets require explicit account IDs:
+`NEXIS_RECORD_INFO_ACCOUNT_ID` and `NEXIS_OWNER_DB_ACCOUNT_ID`.
 
 ### 2) Commit miner read credentials on-chain
 

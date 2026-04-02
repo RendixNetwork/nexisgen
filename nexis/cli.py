@@ -36,7 +36,7 @@ from .protocol import (
     WEIGHT_SUBMISSION_INTERVAL_BLOCKS,
 )
 from .specs import DEFAULT_SPEC_ID, DatasetSpecRegistry
-from .storage.hippius import HippiusCredentials, HippiusS3Store
+from .storage.r2 import R2Credentials, R2S3Store, bucket_name_for_hotkey
 from .validator.caption_semantic import CaptionSemanticChecker
 from .validator.owner_sync import (
     merge_records_into_index as owner_merge_records_into_index,
@@ -84,18 +84,19 @@ def _configure_logging(level: str, *, debug: bool = False) -> None:
     logger.debug("logging configured level=%s debug=%s", logging.getLevelName(configured_level), debug)
 
 
-def _build_remote_credentials(settings: Settings) -> HippiusCredentials:
-    creds = HippiusCredentials(
-        bucket_name=settings.hippius_bucket,
-        endpoint_url=settings.hippius_s3_endpoint,
-        region=settings.hippius_s3_region,
-        read_access_key=settings.hippius_read_access_key,
-        read_secret_key=settings.hippius_read_secret_key,
-        write_access_key=settings.hippius_write_access_key,
-        write_secret_key=settings.hippius_write_secret_key,
+def _build_remote_credentials(settings: Settings, *, hotkey: str) -> R2Credentials:
+    creds = R2Credentials(
+        account_id=settings.r2_account_id,
+        bucket_name=bucket_name_for_hotkey(hotkey),
+        region=settings.r2_region,
+        read_access_key=settings.r2_read_access_key,
+        read_secret_key=settings.r2_read_secret_key,
+        write_access_key=settings.r2_write_access_key,
+        write_secret_key=settings.r2_write_secret_key,
     )
     logger.debug(
-        "constructed hippius credentials bucket=%s endpoint=%s region=%s",
+        "constructed r2 credentials account_id=%s bucket=%s endpoint=%s region=%s",
+        creds.account_id,
         creds.bucket_name,
         creds.endpoint_url,
         creds.region,
@@ -106,23 +107,25 @@ def _build_remote_credentials(settings: Settings) -> HippiusCredentials:
 def _build_shared_bucket_credentials(
     *,
     settings: Settings,
+    account_id: str,
     bucket_name: str,
     read_access_key: str,
     read_secret_key: str,
     write_access_key: str,
     write_secret_key: str,
-) -> HippiusCredentials | None:
+) -> R2Credentials | None:
+    resolved_account_id = account_id.strip()
     bucket = bucket_name.strip()
     read_key = read_access_key.strip()
     read_secret = read_secret_key.strip()
-    if not bucket or not read_key or not read_secret:
+    if not resolved_account_id or not bucket or not read_key or not read_secret:
         return None
     effective_write_key = write_access_key.strip() or read_key
     effective_write_secret = write_secret_key.strip() or read_secret
-    return HippiusCredentials(
+    return R2Credentials(
+        account_id=resolved_account_id,
         bucket_name=bucket,
-        endpoint_url=settings.hippius_s3_endpoint,
-        region=settings.hippius_s3_region,
+        region=settings.r2_region,
         read_access_key=read_key,
         read_secret_key=read_secret,
         write_access_key=effective_write_key,
@@ -140,13 +143,16 @@ def _serialize_record_info(record_index: dict[str, list[float]]) -> str:
 
 async def _load_record_info_snapshot(
     *,
-    record_info_store: HippiusS3Store | None,
+    record_info_store: R2S3Store | None,
     object_key: str,
     workdir: Path,
 ) -> tuple[dict[str, list[float]], bool]:
     if record_info_store is None:
         return {}, True
-    exists = await record_info_store.object_exists(object_key)
+    try:
+        exists = await record_info_store.object_exists(object_key)
+    except Exception:
+        return {}, False
     if not exists:
         return {}, True
     local = workdir / "record-info" / "snapshot.json"
@@ -157,7 +163,8 @@ async def _load_record_info_snapshot(
     try:
         json.loads(raw)
     except Exception:
-        return {}, False
+        logger.warning("record-info snapshot invalid JSON; rebuilding from empty index")
+        return {}, True
     return _parse_record_info(raw), True
 
 
@@ -174,7 +181,7 @@ def _merge_records_into_index(
 
 async def _upload_record_info_snapshot(
     *,
-    record_info_store: HippiusS3Store | None,
+    record_info_store: R2S3Store | None,
     object_key: str,
     workdir: Path,
     record_index: dict[str, list[float]],
@@ -189,8 +196,8 @@ async def _upload_record_info_snapshot(
 
 async def _upload_validated_datasets_to_owner_bucket(
     *,
-    owner_store: HippiusS3Store | None,
-    source_store_for_hotkey: Callable[[str], HippiusS3Store],
+    owner_store: R2S3Store | None,
+    source_store_for_hotkey: Callable[[str], R2S3Store],
     validator: ValidatorPipeline,
     decisions: list[ValidationDecision],
     interval_id: int,
@@ -208,9 +215,9 @@ async def _upload_validated_datasets_to_owner_bucket(
 
 async def _sync_record_info_to_owner_bucket(
     *,
-    record_info_store: HippiusS3Store | None,
-    owner_store: HippiusS3Store | None,
-    source_store_for_hotkey: Callable[[str], HippiusS3Store],
+    record_info_store: R2S3Store | None,
+    owner_store: R2S3Store | None,
+    source_store_for_hotkey: Callable[[str], R2S3Store],
     workdir: Path,
     spec_registry: DatasetSpecRegistry,
 ) -> dict[str, int]:
@@ -496,15 +503,14 @@ def commit_credentials(
     settings = load_settings()
     hotkey_ss58 = _resolve_hotkey_ss58_from_wallet(settings)
     _configure_logging(settings.log_level)
-    creds = _build_remote_credentials(settings)
+    creds = _build_remote_credentials(settings, hotkey=hotkey_ss58)
     manager = ReadCredentialCommitmentManager(
         netuid=settings.netuid,
         network=settings.bt_network,
         wallet_name=settings.bt_wallet_name,
         wallet_hotkey=settings.bt_wallet_hotkey,
         wallet_path=settings.bt_wallet_path,
-        hippius_endpoint_url=settings.hippius_s3_endpoint,
-        hippius_region=settings.hippius_s3_region,
+        r2_region=settings.r2_region,
     )
     commitment = manager.commit_read_credentials(hotkey_ss58, creds)
     logger.info("credentials committed for hotkey=%s", hotkey_ss58)
@@ -543,9 +549,12 @@ def mine(
     _configure_logging("INFO", debug=debug)
     poll_seconds = settings.block_poll_sec if poll_sec is None else poll_sec
 
-    creds = _build_remote_credentials(settings)
+    creds = _build_remote_credentials(settings, hotkey=hotkey_ss58)
+    creds.validate_account_id()
+    creds.validate_read_key_lengths()
     creds.validate_bucket_name()
-    store = HippiusS3Store(creds)
+    creds.validate_bucket_for_hotkey(hotkey_ss58)
+    store = R2S3Store(creds)
     (
         caption_provider,
         caption_api_key,
@@ -596,7 +605,7 @@ def mine(
 async def _run_miner_loop(
     *,
     settings: Settings,
-    store: HippiusS3Store,
+    store: R2S3Store,
     pipeline: MinerPipeline,
     hotkey_ss58: str,
     poll_seconds: float,
@@ -718,20 +727,19 @@ def validate(
         wallet_name=settings.bt_wallet_name,
         wallet_hotkey=settings.bt_wallet_hotkey,
         wallet_path=settings.bt_wallet_path,
-        hippius_endpoint_url=settings.hippius_s3_endpoint,
-        hippius_region=settings.hippius_s3_region,
+        r2_region=settings.r2_region,
     )
-    store_cache: dict[str, HippiusS3Store] = {}
+    store_cache: dict[str, R2S3Store] = {}
     committed_payload: dict[str, dict] = {}
 
-    def store_for_hotkey(hotkey: str) -> HippiusS3Store:
+    def store_for_hotkey(hotkey: str) -> R2S3Store:
         cached = store_cache.get(hotkey)
         if cached is not None:
             return cached
-        creds = manager.build_hippius_credentials(committed_payload.get(hotkey))
+        creds = manager.build_r2_credentials(committed_payload.get(hotkey), hotkey=hotkey)
         if creds is None:
             raise RuntimeError(f"missing committed read credentials for {hotkey}")
-        store = HippiusS3Store(creds)
+        store = R2S3Store(creds)
         store_cache[hotkey] = store
         return store
 
@@ -764,24 +772,10 @@ def validate(
         provider=semantic_provider,
         base_url=semantic_base_url,
     )
-    owner_db_store: HippiusS3Store | None = None
-    if is_owner_validator:
-        owner_db_creds = _build_shared_bucket_credentials(
-            settings=settings,
-            bucket_name=settings.owner_db_bucket,
-            read_access_key=settings.owner_db_read_access_key,
-            read_secret_key=settings.owner_db_read_secret_key,
-            write_access_key=settings.owner_db_write_access_key,
-            write_secret_key=settings.owner_db_write_secret_key,
-        )
-        if owner_db_creds is not None:
-            owner_db_store = HippiusS3Store(owner_db_creds)
-        else:
-            logger.warning("owner validator mode active but owner db credentials are missing")
-
-    record_info_read_store: HippiusS3Store | None = None
+    record_info_read_store: R2S3Store | None = None
     record_info_read_creds = _build_shared_bucket_credentials(
         settings=settings,
+        account_id=settings.record_info_account_id,
         bucket_name=settings.record_info_bucket,
         read_access_key=settings.record_info_read_access_key,
         read_secret_key=settings.record_info_read_secret_key,
@@ -789,14 +783,16 @@ def validate(
         write_secret_key="",
     )
     if record_info_read_creds is not None:
-        record_info_read_store = HippiusS3Store(record_info_read_creds)
+        record_info_read_creds.validate_account_id()
+        record_info_read_store = R2S3Store(record_info_read_creds)
     else:
-        logger.warning("record info read credentials missing; overlap index sync disabled")
+        logger.warning("record info read credentials/account_id missing; overlap index sync disabled")
 
-    record_info_write_store: HippiusS3Store | None = None
+    record_info_write_store: R2S3Store | None = None
     if is_owner_validator:
         record_info_write_creds = _build_shared_bucket_credentials(
             settings=settings,
+            account_id=settings.record_info_account_id,
             bucket_name=settings.record_info_bucket,
             read_access_key=settings.record_info_read_access_key,
             read_secret_key=settings.record_info_read_secret_key,
@@ -804,9 +800,12 @@ def validate(
             write_secret_key=settings.record_info_write_secret_key,
         )
         if record_info_write_creds is not None:
-            record_info_write_store = HippiusS3Store(record_info_write_creds)
+            record_info_write_creds.validate_account_id()
+            record_info_write_store = R2S3Store(record_info_write_creds)
         else:
-            logger.warning("owner validator mode active but record info write credentials are missing")
+            logger.warning(
+                "owner validator mode active but record info write credentials/account_id are missing"
+            )
 
     validator = ValidatorPipeline(
         store_for_hotkey=store_for_hotkey,
@@ -843,7 +842,6 @@ def validate(
                 committed_payload=committed_payload,
                 validator=validator,
                 is_owner_validator=is_owner_validator,
-                owner_db_store=owner_db_store,
                 record_info_read_store=record_info_read_store,
                 record_info_write_store=record_info_write_store,
                 store_for_hotkey=store_for_hotkey,
@@ -908,26 +906,26 @@ def validate_source_auth(
         wallet_name=settings.bt_wallet_name,
         wallet_hotkey=settings.bt_wallet_hotkey,
         wallet_path=settings.bt_wallet_path,
-        hippius_endpoint_url=settings.hippius_s3_endpoint,
-        hippius_region=settings.hippius_s3_region,
+        r2_region=settings.r2_region,
     )
-    store_cache: dict[str, HippiusS3Store] = {}
+    store_cache: dict[str, R2S3Store] = {}
     committed_payload: dict[str, dict] = {}
 
-    def store_for_hotkey(hotkey: str) -> HippiusS3Store:
+    def store_for_hotkey(hotkey: str) -> R2S3Store:
         cached = store_cache.get(hotkey)
         if cached is not None:
             return cached
-        creds = manager.build_hippius_credentials(committed_payload.get(hotkey))
+        creds = manager.build_r2_credentials(committed_payload.get(hotkey), hotkey=hotkey)
         if creds is None:
             raise RuntimeError(f"missing committed read credentials for {hotkey}")
-        store = HippiusS3Store(creds)
+        store = R2S3Store(creds)
         store_cache[hotkey] = store
         return store
 
-    record_info_read_store: HippiusS3Store | None = None
+    record_info_read_store: R2S3Store | None = None
     record_info_read_creds = _build_shared_bucket_credentials(
         settings=settings,
+        account_id=settings.record_info_account_id,
         bucket_name=settings.record_info_bucket,
         read_access_key=settings.record_info_read_access_key,
         read_secret_key=settings.record_info_read_secret_key,
@@ -935,9 +933,10 @@ def validate_source_auth(
         write_secret_key="",
     )
     if record_info_read_creds is not None:
-        record_info_read_store = HippiusS3Store(record_info_read_creds)
+        record_info_read_creds.validate_account_id()
+        record_info_read_store = R2S3Store(record_info_read_creds)
     else:
-        logger.warning("record info read credentials missing; overlap index sync disabled")
+        logger.warning("record info read credentials/account_id missing; overlap index sync disabled")
 
     validator = ValidatorPipeline(
         store_for_hotkey=store_for_hotkey,
@@ -1014,14 +1013,14 @@ def sync_owner_datasets(
         wallet_name=settings.bt_wallet_name,
         wallet_hotkey=settings.bt_wallet_hotkey,
         wallet_path=settings.bt_wallet_path,
-        hippius_endpoint_url=settings.hippius_s3_endpoint,
-        hippius_region=settings.hippius_s3_region,
+        r2_region=settings.r2_region,
     )
-    store_cache: dict[str, HippiusS3Store] = {}
+    store_cache: dict[str, R2S3Store] = {}
     committed_payload: dict[str, dict] = {}
 
     owner_db_creds = _build_shared_bucket_credentials(
         settings=settings,
+        account_id=settings.owner_db_account_id,
         bucket_name=settings.owner_db_bucket,
         read_access_key=settings.owner_db_read_access_key,
         read_secret_key=settings.owner_db_read_secret_key,
@@ -1029,11 +1028,13 @@ def sync_owner_datasets(
         write_secret_key=settings.owner_db_write_secret_key,
     )
     if owner_db_creds is None:
-        raise typer.BadParameter("owner dataset bucket credentials are required")
-    owner_db_store = HippiusS3Store(owner_db_creds)
+        raise typer.BadParameter("owner dataset bucket credentials and NEXIS_OWNER_DB_ACCOUNT_ID are required")
+    owner_db_creds.validate_account_id()
+    owner_db_store = R2S3Store(owner_db_creds)
 
     record_info_read_creds = _build_shared_bucket_credentials(
         settings=settings,
+        account_id=settings.record_info_account_id,
         bucket_name=settings.record_info_bucket,
         read_access_key=settings.record_info_read_access_key,
         read_secret_key=settings.record_info_read_secret_key,
@@ -1041,19 +1042,22 @@ def sync_owner_datasets(
         write_secret_key="",
     )
     if record_info_read_creds is None:
-        raise typer.BadParameter("record-info bucket read credentials are required")
-    record_info_read_store = HippiusS3Store(record_info_read_creds)
+        raise typer.BadParameter(
+            "record-info bucket read credentials and NEXIS_RECORD_INFO_ACCOUNT_ID are required"
+        )
+    record_info_read_creds.validate_account_id()
+    record_info_read_store = R2S3Store(record_info_read_creds)
 
     spec_registry = DatasetSpecRegistry.with_defaults()
 
-    def store_for_hotkey(hotkey: str) -> HippiusS3Store:
+    def store_for_hotkey(hotkey: str) -> R2S3Store:
         cached = store_cache.get(hotkey)
         if cached is not None:
             return cached
-        creds = manager.build_hippius_credentials(committed_payload.get(hotkey))
+        creds = manager.build_r2_credentials(committed_payload.get(hotkey), hotkey=hotkey)
         if creds is None:
             raise RuntimeError(f"missing committed read credentials for {hotkey}")
-        store = HippiusS3Store(creds)
+        store = R2S3Store(creds)
         store_cache[hotkey] = store
         return store
 
@@ -1083,14 +1087,13 @@ async def _run_validator_loop(
     poll_seconds: float,
     enabled_specs: list[str],
     manager: "ReadCredentialCommitmentManager",
-    store_cache: dict[str, HippiusS3Store],
+    store_cache: dict[str, R2S3Store],
     committed_payload: dict[str, dict],
     validator: ValidatorPipeline,
     is_owner_validator: bool,
-    owner_db_store: HippiusS3Store | None,
-    record_info_read_store: HippiusS3Store | None,
-    record_info_write_store: HippiusS3Store | None,
-    store_for_hotkey: Callable[[str], HippiusS3Store],
+    record_info_read_store: R2S3Store | None,
+    record_info_write_store: R2S3Store | None,
+    store_for_hotkey: Callable[[str], R2S3Store],
     blacklist_file: Path | None,
     exclude_hotkeys: str,
     reporter: ValidationResultReporter | None = None,
@@ -1141,212 +1144,210 @@ async def _run_validator_loop(
                     network=settings.bt_network,
                     subtensor=subtensor,
                 )
-                # latest_eligible_interval_start = _latest_eligible_validation_interval_start(current_block)
-                # next_interval_start = last_validated_interval_start + INTERVAL_LENGTH_BLOCKS
-                # logger.debug(
-                #     "validator tick current_block=%d eligible_start=%s next_interval=%d last_validated=%d",
-                #     current_block,
-                #     str(latest_eligible_interval_start),
-                #     next_interval_start,
-                #     last_validated_interval_start,
-                # )
+                latest_eligible_interval_start = _latest_eligible_validation_interval_start(current_block)
+                next_interval_start = last_validated_interval_start + INTERVAL_LENGTH_BLOCKS
+                logger.debug(
+                    "validator tick current_block=%d eligible_start=%s next_interval=%d last_validated=%d",
+                    current_block,
+                    str(latest_eligible_interval_start),
+                    next_interval_start,
+                    last_validated_interval_start,
+                )
 
-                # if latest_eligible_interval_start is not None:
-                #     if next_interval_start > latest_eligible_interval_start:
-                #         logger.info(
-                #             "waiting for next interval to be eligible, current_block=%d, next_interval=(%d, %d)",
-                #             current_block,
-                #             next_interval_start,
-                #             next_interval_start + INTERVAL_LENGTH_BLOCKS,
-                #         )
-                #         await _sleep_poll(poll_seconds)
-                #         continue
-                #     store_cache.clear()
-                #     hotkeys, payload = await _fetch_hotkeys_with_commitments(
-                #         settings=settings,
-                #         manager=manager,
-                #         blacklist_file=blacklist_file,
-                #         exclude_hotkeys=exclude_hotkeys,
-                #         subtensor=subtensor,
-                #     )
-                #     committed_payload.clear()
-                #     committed_payload.update(payload)
-                #     while next_interval_start <= latest_eligible_interval_start:
-                #         if hotkeys:
-                #             logger.info(
-                #                 "validating interval=%s miners=%d",
-                #                 _interval_label(next_interval_start),
-                #                 len(hotkeys),
-                #             )
-                #             invalid_hotkeys_for_interval: set[str] = set()
-                #             if reporter is not None:
-                #                 invalid_hotkeys_for_interval = set(
-                #                     await reporter.fetch_invalid_hotkeys(
-                #                         interval_id=next_interval_start
-                #                     )
-                #                 )
-                #                 if invalid_hotkeys_for_interval:
-                #                     logger.info(
-                #                         "api invalid hotkeys interval=%s count=%d",
-                #                         _interval_label(next_interval_start),
-                #                         len(invalid_hotkeys_for_interval),
-                #                     )
-                #             global_record_index, record_info_loaded = await _load_record_info_snapshot(
-                #                 record_info_store=record_info_read_store,
-                #                 object_key=settings.record_info_object_key,
-                #                 workdir=settings.workdir / "validator",
-                #             )
-                #             decisions, interval_weights = await validator.validate_interval(
-                #                 candidate_hotkeys=hotkeys,
-                #                 interval_id=next_interval_start,
-                #                 workdir=settings.workdir / "validator",
-                #                 global_record_index=global_record_index,
-                #                 invalid_hotkeys=invalid_hotkeys_for_interval,
-                #             )
-                #             # if reporter is not None:
-                #             #     await reporter.report_interval(
-                #             #         interval_id=next_interval_start,
-                #             #         decisions=decisions,
-                #             #     )
-                #             for decision in decisions:
-                #                 if not decision.accepted:
-                #                     continue
-                #                 epoch_score_totals[decision.miner_hotkey] += (
-                #                     validator.weight_computer.score_from_sample_count(decision.record_count)
-                #                 )
-                #             # New score material was added; refresh frozen snapshot on next submit.
-                #             frozen_epoch_weights = None
-                #             frozen_epoch = None
-                #             payload_json = [d.model_dump(mode="json") for d in decisions]
-                #             console.print(f"validated interval {_interval_label(next_interval_start)}")
-                #             console.print_json(json.dumps(payload_json))
-                #             console.print("interval weights:")
-                #             console.print_json(json.dumps(interval_weights))
-                #             console.print("epoch accumulated scores:")
-                #             console.print_json(json.dumps(dict(epoch_score_totals)))
-                #             logger.debug(
-                #                 "interval=%s decisions=%d interval_weight_entries=%d epoch_score_entries=%d",
-                #                 _interval_label(next_interval_start),
-                #                 len(decisions),
-                #                 len(interval_weights),
-                #                 len(epoch_score_totals),
-                #             )
-                #             if is_owner_validator:
-                #                 try:
-                #                     published_rows_by_hotkey = await _upload_validated_datasets_to_owner_bucket(
-                #                         owner_store=record_info_write_store,
-                #                         source_store_for_hotkey=store_for_hotkey,
-                #                         validator=validator,
-                #                         decisions=decisions,
-                #                         interval_id=next_interval_start,
-                #                         workdir=settings.workdir / "validator",
-                #                     )
-                #                     for rows in published_rows_by_hotkey.values():
-                #                         if not rows:
-                #                             continue
-                #                         _merge_records_into_index(
-                #                             record_index=global_record_index,
-                #                             records=rows,
-                #                         )
-                #                     if record_info_loaded:
-                #                         await _upload_record_info_snapshot(
-                #                             record_info_store=record_info_write_store,
-                #                             object_key=settings.record_info_object_key,
-                #                             workdir=settings.workdir / "validator",
-                #                             record_index=global_record_index,
-                #                         )
-                #                     else:
-                #                         logger.warning(
-                #                             "skipping record-info write interval=%s reason=record_info_read_untrusted",
-                #                             _interval_label(next_interval_start),
-                #                         )
-                #                 except Exception as exc:
-                #                     logger.exception(
-                #                         "owner sync failed for interval=%s: %s",
-                #                         _interval_label(next_interval_start),
-                #                         exc,
-                #                     )
-                #         else:
-                #             console.print(
-                #                 "no miners with committed read credentials; "
-                #                 f"interval {_interval_label(next_interval_start)} skipped"
-                #             )
+                if latest_eligible_interval_start is not None:
+                    if next_interval_start > latest_eligible_interval_start:
+                        logger.info(
+                            "waiting for next interval to be eligible, current_block=%d, next_interval=(%d, %d)",
+                            current_block,
+                            next_interval_start,
+                            next_interval_start + INTERVAL_LENGTH_BLOCKS,
+                        )
+                        await _sleep_poll(poll_seconds)
+                        continue
+                    store_cache.clear()
+                    hotkeys, payload = await _fetch_hotkeys_with_commitments(
+                        settings=settings,
+                        manager=manager,
+                        blacklist_file=blacklist_file,
+                        exclude_hotkeys=exclude_hotkeys,
+                        subtensor=subtensor,
+                    )
+                    committed_payload.clear()
+                    committed_payload.update(payload)
+                    while next_interval_start <= latest_eligible_interval_start:
+                        if hotkeys:
+                            logger.info(
+                                "validating interval=%s miners=%d",
+                                _interval_label(next_interval_start),
+                                len(hotkeys),
+                            )
+                            invalid_hotkeys_for_interval: set[str] = set()
+                            if reporter is not None:
+                                invalid_hotkeys_for_interval = set(
+                                    await reporter.fetch_invalid_hotkeys(
+                                        interval_id=next_interval_start
+                                    )
+                                )
+                                if invalid_hotkeys_for_interval:
+                                    logger.info(
+                                        "api invalid hotkeys interval=%s count=%d",
+                                        _interval_label(next_interval_start),
+                                        len(invalid_hotkeys_for_interval),
+                                    )
+                            global_record_index, record_info_loaded = await _load_record_info_snapshot(
+                                record_info_store=record_info_read_store,
+                                object_key=settings.record_info_object_key,
+                                workdir=settings.workdir / "validator",
+                            )
+                            decisions, interval_weights = await validator.validate_interval(
+                                candidate_hotkeys=hotkeys,
+                                interval_id=next_interval_start,
+                                workdir=settings.workdir / "validator",
+                                global_record_index=global_record_index,
+                                invalid_hotkeys=invalid_hotkeys_for_interval,
+                            )
+                            if reporter is not None:
+                                await reporter.report_interval(
+                                    interval_id=next_interval_start,
+                                    decisions=decisions,
+                                )
+                            for decision in decisions:
+                                if not decision.accepted:
+                                    continue
+                                epoch_score_totals[decision.miner_hotkey] += (
+                                    validator.weight_computer.score_from_sample_count(decision.record_count)
+                                )
+                            # New score material was added; refresh frozen snapshot on next submit.
+                            frozen_epoch_weights = None
+                            frozen_epoch = None
+                            payload_json = [d.model_dump(mode="json") for d in decisions]
+                            console.print(f"validated interval {_interval_label(next_interval_start)}")
+                            console.print_json(json.dumps(payload_json))
+                            console.print("interval weights:")
+                            console.print_json(json.dumps(interval_weights))
+                            console.print("epoch accumulated scores:")
+                            console.print_json(json.dumps(dict(epoch_score_totals)))
+                            logger.debug(
+                                "interval=%s decisions=%d interval_weight_entries=%d epoch_score_entries=%d",
+                                _interval_label(next_interval_start),
+                                len(decisions),
+                                len(interval_weights),
+                                len(epoch_score_totals),
+                            )
+                            if is_owner_validator:
+                                try:
+                                    published_rows_by_hotkey = await _upload_validated_datasets_to_owner_bucket(
+                                        owner_store=record_info_write_store,
+                                        source_store_for_hotkey=store_for_hotkey,
+                                        validator=validator,
+                                        decisions=decisions,
+                                        interval_id=next_interval_start,
+                                        workdir=settings.workdir / "validator",
+                                    )
+                                    for rows in published_rows_by_hotkey.values():
+                                        if not rows:
+                                            continue
+                                        _merge_records_into_index(
+                                            record_index=global_record_index,
+                                            records=rows,
+                                        )
+                                    if record_info_loaded:
+                                        await _upload_record_info_snapshot(
+                                            record_info_store=record_info_write_store,
+                                            object_key=settings.record_info_object_key,
+                                            workdir=settings.workdir / "validator",
+                                            record_index=global_record_index,
+                                        )
+                                    else:
+                                        logger.warning(
+                                            "skipping record-info write interval=%s reason=record_info_read_untrusted",
+                                            _interval_label(next_interval_start),
+                                        )
+                                except Exception as exc:
+                                    logger.exception(
+                                        "owner sync failed for interval=%s: %s",
+                                        _interval_label(next_interval_start),
+                                        exc,
+                                    )
+                        else:
+                            console.print(
+                                "no miners with committed read credentials; "
+                                f"interval {_interval_label(next_interval_start)} skipped"
+                            )
 
-                #         last_validated_interval_start = next_interval_start
-                #         next_interval_start += INTERVAL_LENGTH_BLOCKS
+                        last_validated_interval_start = next_interval_start
+                        next_interval_start += INTERVAL_LENGTH_BLOCKS
 
                 current_weight_epoch = current_block // WEIGHT_SUBMISSION_INTERVAL_BLOCKS
                 should_try_submit = (
                     current_weight_epoch > last_submitted_weight_epoch
                     and time.monotonic() >= next_weight_retry_ts
                 )
-                # logger.debug(
-                #     "weight submission check epoch=%d last_submitted=%d should_try=%s",
-                #     current_weight_epoch,
-                #     last_submitted_weight_epoch,
-                #     str(should_try_submit),
-                # )
+                logger.debug(
+                    "weight submission check epoch=%d last_submitted=%d should_try=%s",
+                    current_weight_epoch,
+                    last_submitted_weight_epoch,
+                    str(should_try_submit),
+                )
                 if should_try_submit:
                     submission_block = current_weight_epoch * WEIGHT_SUBMISSION_INTERVAL_BLOCKS
-                #     snapshot: dict[str, Any]
-                #     if latest_result_url:
-                #         try:
-                #             snapshot = await fetch_latest_result_snapshot(
-                #                 url=latest_result_url,
-                #                 timeout_sec=settings.latest_result_timeout_sec,
-                #             )
-                #         except RuntimeError as exc:
-                #             logger.warning(
-                #                 "latest-result fetch failed epoch=%d url=%s: %s; "
-                #                 "continuing with empty API decisions for this weight pass",
-                #                 current_weight_epoch,
-                #                 latest_result_url,
-                #                 exc,
-                #             )
-                #             snapshot = {"decisions": []}
-                #     else:
-                #         snapshot = {"decisions": []}
+                    snapshot: dict[str, Any]
+                    if latest_result_url:
+                        try:
+                            snapshot = await fetch_latest_result_snapshot(
+                                url=latest_result_url,
+                                timeout_sec=settings.latest_result_timeout_sec,
+                            )
+                        except RuntimeError as exc:
+                            logger.warning(
+                                "latest-result fetch failed epoch=%d url=%s: %s; "
+                                "continuing with empty API decisions for this weight pass",
+                                current_weight_epoch,
+                                latest_result_url,
+                                exc,
+                            )
+                            snapshot = {"decisions": []}
+                    else:
+                        snapshot = {"decisions": []}
 
-                #     decisions_raw = snapshot.get("decisions")
-                #     if not isinstance(decisions_raw, list):
-                #         decisions_raw = []
-                #     decisions: list[dict[str, Any]] = [
-                #         row for row in decisions_raw if isinstance(row, dict)
-                #     ]
-                #     score_totals = compute_score_totals_from_decisions(
-                #         decisions=decisions,
-                #         interval_start=submission_block - WEIGHT_SUBMISSION_INTERVAL_BLOCKS - INTERVAL_LENGTH_BLOCKS,
-                #         interval_end=submission_block,
-                #         weight_computer=validator.weight_computer,
-                #     )
-                #     if not score_totals:
-                #         logger.info(
-                #             "no valid miner hotkeys in epoch=%d; forcing burn fallback to UID0",
-                #             current_weight_epoch,
-                #         )
-                #         frozen_epoch_weights = {}
-                #     else:
-                #         frozen_epoch_weights = validator.weight_computer.compute_weights_from_totals(dict(score_totals))
-                #     current_interval_id = _current_interval_start(current_block)
-                #     invalid_for_submission: set[str] = set()
-                #     if reporter is not None:
-                #         invalid_for_submission = set(
-                #             await reporter.fetch_invalid_hotkeys(interval_id=current_interval_id)
-                #         )
-                #     if invalid_for_submission:
-                #         for hotkey in invalid_for_submission:
-                #             if hotkey in frozen_epoch_weights:
-                #                 frozen_epoch_weights[hotkey] = 0.0
-                #         frozen_epoch_weights = validator.weight_computer.normalize_weights(
-                #             frozen_epoch_weights
-                #         )
-                #         logger.info(
-                #             "zeroed invalid hotkeys before set_weights count=%d",
-                #             len(invalid_for_submission),
-                #         )
-                #     logger.info("frozen_epoch_weights: %s", frozen_epoch_weights)
-
-                    frozen_epoch_weights = {}
+                    decisions_raw = snapshot.get("decisions")
+                    if not isinstance(decisions_raw, list):
+                        decisions_raw = []
+                    decisions: list[dict[str, Any]] = [
+                        row for row in decisions_raw if isinstance(row, dict)
+                    ]
+                    score_totals = compute_score_totals_from_decisions(
+                        decisions=decisions,
+                        interval_start=submission_block - WEIGHT_SUBMISSION_INTERVAL_BLOCKS - INTERVAL_LENGTH_BLOCKS,
+                        interval_end=submission_block,
+                        weight_computer=validator.weight_computer,
+                    )
+                    if not score_totals:
+                        logger.info(
+                            "no valid miner hotkeys in epoch=%d; forcing burn fallback to UID0",
+                            current_weight_epoch,
+                        )
+                        frozen_epoch_weights = {}
+                    else:
+                        frozen_epoch_weights = validator.weight_computer.compute_weights_from_totals(dict(score_totals))
+                    current_interval_id = _current_interval_start(current_block)
+                    invalid_for_submission: set[str] = set()
+                    if reporter is not None:
+                        invalid_for_submission = set(
+                            await reporter.fetch_invalid_hotkeys(interval_id=current_interval_id)
+                        )
+                    if invalid_for_submission:
+                        for hotkey in invalid_for_submission:
+                            if hotkey in frozen_epoch_weights:
+                                frozen_epoch_weights[hotkey] = 0.0
+                        frozen_epoch_weights = validator.weight_computer.normalize_weights(
+                            frozen_epoch_weights
+                        )
+                        logger.info(
+                            "zeroed invalid hotkeys before set_weights count=%d",
+                            len(invalid_for_submission),
+                        )
+                    logger.info("frozen_epoch_weights: %s", frozen_epoch_weights)
 
                     submission = await submit_weights_to_chain_async(
                         netuid=settings.netuid,
@@ -1391,10 +1392,6 @@ async def _run_validator_loop(
                         backoff = _weight_retry_backoff_sec(weight_failure_count)
                         next_weight_retry_ts = time.monotonic() + float(backoff)
                         logger.error("set_weights failed: %s", submission.reason)
-                else:
-                    logger.info("waiting for next weight current block=%d submission block=%d next submission block=%d", current_block, current_weight_epoch * WEIGHT_SUBMISSION_INTERVAL_BLOCKS, (current_weight_epoch + 1) * WEIGHT_SUBMISSION_INTERVAL_BLOCKS)
-                    await _sleep_poll(60)
-                    continue
             except Exception as exc:
                 logger.exception("validator loop iteration failed: %s", exc)
 
@@ -1407,13 +1404,13 @@ async def _run_source_auth_validator_loop(
     poll_seconds: float,
     enabled_specs: list[str],
     manager: "ReadCredentialCommitmentManager",
-    store_cache: dict[str, HippiusS3Store],
+    store_cache: dict[str, R2S3Store],
     committed_payload: dict[str, dict],
     validator: ValidatorPipeline,
     blacklist_file: Path | None,
     exclude_hotkeys: str,
     reporter: ValidationResultReporter,
-    record_info_read_store: HippiusS3Store | None,
+    record_info_read_store: R2S3Store | None,
 ) -> None:
     async with _open_subtensor(settings.bt_network) as subtensor:
         start_block = await fetch_current_block_async(
@@ -1508,11 +1505,11 @@ async def _run_owner_sync_worker_loop(
     settings: Settings,
     poll_seconds: float,
     manager: "ReadCredentialCommitmentManager",
-    store_cache: dict[str, HippiusS3Store],
+    store_cache: dict[str, R2S3Store],
     committed_payload: dict[str, dict],
-    owner_db_store: HippiusS3Store,
-    record_info_read_store: HippiusS3Store,
-    store_for_hotkey: Callable[[str], HippiusS3Store],
+    owner_db_store: R2S3Store,
+    record_info_read_store: R2S3Store,
+    store_for_hotkey: Callable[[str], R2S3Store],
     blacklist_file: Path | None,
     exclude_hotkeys: str,
     spec_registry: DatasetSpecRegistry,

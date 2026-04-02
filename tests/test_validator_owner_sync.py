@@ -55,6 +55,14 @@ def test_record_info_round_trip_and_merge() -> None:
     assert values == [0.0, 8.0]
 
 
+def test_merge_records_normalizes_source_urls() -> None:
+    index: dict[str, list[float]] = {}
+    row = _row("c1", 0.0)
+    row.source_video_url = "https://youtu.be/bQO8kMZwWuQ"
+    merge_records_into_index(record_index=index, records=[row])
+    assert index == {"https://www.youtube.com/watch?v=bQO8kMZwWuQ": [0.0]}
+
+
 def test_parse_record_info_legacy_payload_normalizes_to_url_only() -> None:
     payload = json.dumps(
         {
