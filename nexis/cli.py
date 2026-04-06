@@ -1382,7 +1382,7 @@ async def _run_validator_loop(
                     ]
                     score_totals = compute_score_totals_from_decisions(
                         decisions=decisions,
-                        interval_start=submission_block - WEIGHT_SUBMISSION_INTERVAL_BLOCKS - INTERVAL_LENGTH_BLOCKS,
+                        interval_start=submission_block - 1500 - INTERVAL_LENGTH_BLOCKS,
                         interval_end=submission_block,
                         weight_computer=validator.weight_computer,
                     )

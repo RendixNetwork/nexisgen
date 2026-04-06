@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nexisgen"
-version = "0.2.0"
+version = "0.2.1"
 description = "Nexisgen subnet miner/validator implementation."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
