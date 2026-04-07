@@ -17,10 +17,16 @@ class CheckResult:
 
 
 HardCheckRule = Callable[[list[ClipRecord]], list[str]]
+_MAX_CLIP_START_SEC = 5000.0
 
 
 def default_hard_check_rules() -> list[HardCheckRule]:
-    return [_check_youtube_sources, _check_overlap, _check_caption_alignment]
+    return [
+        _check_youtube_sources,
+        _check_overlap,
+        _check_caption_alignment,
+        _check_clip_start_limit,
+    ]
 
 
 def run_hard_checks(records: list[ClipRecord], rules: list[HardCheckRule] | None = None) -> CheckResult:
@@ -80,10 +86,18 @@ def _check_caption_alignment(records: list[ClipRecord]) -> list[str]:
         if not text:
             failures.append(f"empty_caption:{row.clip_id}")
             continue
-        if len(text.split()) < 3:
+        if len(text.split()) < 20:
             failures.append(f"short_caption:{row.clip_id}")
             continue
         if "http://" in text or "https://" in text:
             failures.append(f"url_like_caption:{row.clip_id}")
+    return failures
+
+
+def _check_clip_start_limit(records: list[ClipRecord]) -> list[str]:
+    failures: list[str] = []
+    for row in records:
+        if row.clip_start_sec > _MAX_CLIP_START_SEC:
+            failures.append(f"clip_start_gt_5000:{row.clip_id}")
     return failures
 

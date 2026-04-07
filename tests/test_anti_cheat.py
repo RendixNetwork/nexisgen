@@ -57,3 +57,9 @@ def test_malicious_youtube_like_domain_detection() -> None:
     result = run_hard_checks(rows)
     assert any("non_youtube_source" in item for item in result.failures)
 
+
+def test_clip_start_limit_detection() -> None:
+    rows = [_row("c1", 5000.1, "https://youtube.com/watch?v=abc")]
+    result = run_hard_checks(rows)
+    assert any(item.startswith("clip_start_gt_5000:") for item in result.failures)
+
