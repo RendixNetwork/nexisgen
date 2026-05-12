@@ -5,7 +5,7 @@ services:
     # Local build for testing.  Run with `--build` to rebuild from the repo:
     #   docker compose --env-file compose.env -f docker-compose.validator.yml up -d --build
     # To use a published image instead, comment out `build:` and set
-    NEXIS_VALIDATOR_IMAGE in compose.env (default: rendixnetwork/nexis:latest).
+    # NEXIS_VALIDATOR_IMAGE in compose.env (default: rendixnetwork/nexis:latest).
     # build:
     #   context: ..
     #   dockerfile: docker/Dockerfile.validator
