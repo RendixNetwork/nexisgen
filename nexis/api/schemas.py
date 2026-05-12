@@ -1,111 +1,58 @@
-"""Pydantic schemas for validation evidence API."""
+"""Pydantic schemas for the validator API."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
-
-
-class DecisionIngestItem(BaseModel):
-    miner_hotkey: str = Field(min_length=1)
-    accepted: bool
-    failures: list[str] = Field(default_factory=list)
-    record_count: int = Field(default=0, ge=0)
-    global_overlap_pruned_count: int = Field(default=0, ge=0)
-    cross_miner_overlap_pruned_count: int = Field(default=0, ge=0)
-
-    @model_validator(mode="after")
-    def _require_failures_for_reject(self) -> "DecisionIngestItem":
-        if not self.accepted and not self.failures:
-            raise ValueError("failures are required when accepted is false")
-        return self
+from pydantic import BaseModel, Field
 
 
-class ValidationResultsIngestRequest(BaseModel):
-    interval_id: int = Field(ge=0)
-    decisions: list[DecisionIngestItem] = Field(default_factory=list)
+class TrainingScoreEntry(BaseModel):
+    aggregate: float = Field(ge=0.0)
+    # Per-dimension aggregate score (VBench `[0]` per dimension), used by the
+    # API to roll up into total_score.json.
+    dimensions: dict[str, float] = Field(default_factory=dict)
+    # Optional: raw VBench dimension blob (`[aggregate, [per_video...]]`)
+    # preserved verbatim in the per-validator JSON so consumers can drill
+    # into the per-video breakdown.  Not used by total_score aggregation.
+    full_dimensions: dict[str, Any] = Field(default_factory=dict)
+    # Miner-side interval_id of the dataset that produced these outputs.
+    # Stamped by the trainer in `_done.json`; preserved into total_score.json.
+    miner_interval_id: int | None = None
 
-    @model_validator(mode="after")
-    def _decisions_non_empty(self) -> "ValidationResultsIngestRequest":
-        if not self.decisions:
-            raise ValueError("decisions must not be empty")
-        return self
+
+class TrainingScoresIngestRequest(BaseModel):
+    cycle_id: int = Field(ge=1)
+    scores: dict[str, TrainingScoreEntry] = Field(default_factory=dict)
 
 
-class IngestResponse(BaseModel):
-    saved: int = Field(ge=0)
+class TrainingScoresIngestResponse(BaseModel):
     validator_hotkey: str
-    interval_id: int = Field(ge=0)
+    cycle_id: int = Field(ge=1)
+    miner_count: int = Field(ge=0)
 
 
-class StoredDecision(BaseModel):
-    interval_id: int = Field(ge=0)
-    validator_hotkey: str
-    miner_hotkey: str
-    accepted: bool
-    failures: list[str] = Field(default_factory=list)
-    record_count: int = Field(default=0, ge=0)
-    global_overlap_pruned_count: int = Field(default=0, ge=0)
-    cross_miner_overlap_pruned_count: int = Field(default=0, ge=0)
-    signature: str
-    timestamp: int
-    nonce: str
-    body_sha256: str
-    received_at: datetime
-
-
-class QueryResponse(BaseModel):
-    validator_hotkey: str
-    interval_id: int = Field(ge=0)
-    decisions: list[StoredDecision] = Field(default_factory=list)
-
-
-class LatestResultDecision(BaseModel):
-    interval_id: int = Field(ge=0)
-    validator_hotkey: str
-    miner_hotkey: str
-    accepted: bool
-    failures: list[str] = Field(default_factory=list)
-    record_count: int = Field(default=0, ge=0)
-    global_overlap_pruned_count: int = Field(default=0, ge=0)
-    cross_miner_overlap_pruned_count: int = Field(default=0, ge=0)
-    received_at: datetime
-
-
-class LatestResultResponse(BaseModel):
-    current_block: int = Field(ge=0)
-    start_interval_id: int = Field(ge=0)
-    end_interval_id: int = Field(ge=0)
-    refreshed_every_blocks: int = Field(ge=1)
-    cached_at: datetime
-    decisions: list[LatestResultDecision] = Field(default_factory=list)
-
-
-class InvalidHotkeysWindowResponse(BaseModel):
-    interval_id: int = Field(ge=0)
-    window_start_interval_id: int = Field(ge=0)
-    window_end_interval_id: int = Field(ge=0)
+class InvalidHotkeysListResponse(BaseModel):
     invalid_hotkeys: list[str] = Field(default_factory=list)
+
+
+class InvalidHotkeysIngestRequest(BaseModel):
+    invalid_hotkeys: list[str] = Field(default_factory=list)
+
+
+class InvalidHotkeysIngestResponse(BaseModel):
+    validator_hotkey: str
+    saved_count: int = Field(ge=0)
+
+
+class InvalidHotkeysResetResponse(BaseModel):
+    cleared: int = Field(ge=0)
 
 
 class BlacklistResponse(BaseModel):
     blacklist_hotkeys: list[str] = Field(default_factory=list)
 
 
-class InvalidHotkeysIngestRequest(BaseModel):
-    interval_id: int = Field(ge=0)
-    invalid_hotkeys: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _invalid_hotkeys_non_empty(self) -> "InvalidHotkeysIngestRequest":
-        if not self.invalid_hotkeys:
-            raise ValueError("invalid_hotkeys must not be empty")
-        return self
-
-
-class InvalidHotkeysIngestResponse(BaseModel):
-    validator_hotkey: str
-    interval_id: int = Field(ge=0)
-    saved_count: int = Field(ge=0)
-
+class TotalScoreResponse(BaseModel):
+    cycle_id: int = Field(ge=1)
+    scores: dict[str, dict[str, Any]] = Field(default_factory=dict)

@@ -29,6 +29,7 @@ coverage.xml
 docker/compose.env
 docker/validator.env
 docker/validation-api.env
+docker/trainer.env
 *.log
 
 # IDE / editor
@@ -40,3 +41,9 @@ docker/validation-api.env
 
 
 docker/data/
+docker/nginx/
+# Trainer assets — populated locally; weights are too large to commit
+models/*
+!models/.gitkeep
+config.json.bak
+model_download_summary.json

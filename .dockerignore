@@ -1,6 +1,7 @@
 .git
 .github
 .venv
+venv
 .pytest_cache
 .mypy_cache
 .ruff_cache
@@ -15,3 +16,11 @@ __pycache__
 *.tmp
 tests
 docs
+
+# Trainer assets: ship config.json + the empty models/ placeholder, but never
+# the multi-GB downloaded weights or backup files.
+models/Wan2.2-TI2V-5B-Diffusers
+models/*.bin
+models/*.safetensors
+config.json.bak
+model_download_summary.json

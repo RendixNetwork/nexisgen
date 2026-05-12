@@ -2,23 +2,45 @@ name: nexis-validator
 
 services:
   validator:
-    image: ${NEXIS_VALIDATOR_IMAGE:-rendixnetwork/nexis:latest}
+    # Local build for testing.  Run with `--build` to rebuild from the repo:
+    #   docker compose --env-file compose.env -f docker-compose.validator.yml up -d --build
+    # To use a published image instead, comment out `build:` and set
+    NEXIS_VALIDATOR_IMAGE in compose.env (default: rendixnetwork/nexis:latest).
+    # build:
+    #   context: ..
+    #   dockerfile: docker/Dockerfile.validator
+    image: ${NEXIS_VALIDATOR_IMAGE:-nexis-validator:local}
     container_name: nexis-validator
     restart: unless-stopped
     env_file:
       - ${VALIDATOR_ENV_FILE:-./validator.env}
     command: ["validate"]
-    read_only: true
+    # NB: read_only and cap_drop are intentionally NOT set — `nexis validate`
+    # spawns sibling VBench containers via the host docker socket and the CLI
+    # writes ephemeral files under /tmp.
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=256m
       - /root/.bittensor:rw,nosuid,nodev,noexec,size=64m,uid=0,gid=0,mode=0700
+    environment:
+      # The validator constructs `-v <workdir>/...:/...` mounts for sibling
+      # VBench containers; the host daemon resolves the left side against the
+      # HOST filesystem, so the in-container workdir path MUST equal the host
+      # path that's bind-mounted onto it. Force them to match.
+      NEXIS_WORKDIR: ${NEXIS_WORKDIR_HOST_PATH:-/var/lib/nexis}
     volumes:
-      - ${NEXIS_WORKDIR_HOST_PATH:-./data/nexis}:/var/lib/nexis
+      # 1:1 workdir mount — same absolute path on host and in container.
+      - ${NEXIS_WORKDIR_HOST_PATH:-/var/lib/nexis}:${NEXIS_WORKDIR_HOST_PATH:-/var/lib/nexis}
       - ${BT_WALLET_HOST_PATH:?BT_WALLET_HOST_PATH is required}:/root/.bittensor/wallets:ro
+      # Sibling-container access: vbench containers are launched on the host
+      # docker daemon. The mount below is required and must match the host path.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # NB: eval data is no longer mounted from a static host dir. The
+      # validator now downloads the canonical eval dataset from the
+      # nexis-eval bucket into `<NEXIS_WORKDIR>/eval_data/` at the start of
+      # every scoring cycle, and the workdir is already mirrored 1:1 above,
+      # so sibling vbench containers see the fresh data without any extra
+      # bind mount here.
     labels:
       - com.centurylinklabs.watchtower.enable=true
 
@@ -28,4 +50,4 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 30 nexis-validator
+    command: --interval ${WATCHTOWER_POLL_INTERVAL:-300} nexis-validator

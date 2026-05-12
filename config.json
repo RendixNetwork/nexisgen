@@ -1,0 +1,89 @@
+{
+  "active_dataset": "dataset_a",
+  "project_output_root": "runs",
+  "model_id": "models/Wan2.2-TI2V-5B-Diffusers",
+  "model_download": {
+    "source_model_id": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+    "local_dir": "models/Wan2.2-TI2V-5B-Diffusers",
+    "revision": "main",
+    "use_local_model_after_download": true,
+    "allow_patterns": [
+      "*.json",
+      "*.txt",
+      "*.model",
+      "*.safetensors",
+      "*.bin",
+      "vae/*",
+      "transformer/*",
+      "transformer_2/*",
+      "scheduler/*",
+      "tokenizer/*",
+      "text_encoder/*",
+      "image_encoder/*",
+      "feature_extractor/*"
+    ],
+    "resolved_path": "/workspace/nexisgen/models/Wan2.2-TI2V-5B-Diffusers"
+  },
+  "huggingface_dataset": {
+    "enabled": false,
+    "repo_id": "replace-with-org/dataset-name",
+    "subset": null,
+    "split": "train",
+    "video_column": "video",
+    "prompt_column": "prompt",
+    "id_column": "id",
+    "max_items": null,
+    "streaming": true,
+    "local_dataset_dir": "J:/datasets/dataset_a",
+    "overwrite": false,
+    "update_active_dataset_manifest": true
+  },
+  "device": "cuda:0",
+  "diagnostics": {
+    "run_before_training": false,
+    "allow_resize": true,
+    "allow_training_with_errors": false
+  },
+  "datasets": {
+    "dataset_a": {
+      "display_name": "8111500_converted",
+      "manifest": "/workspace/training/5DqP2tPT53GcCmyM8P97qBWhvLZ9fsGisw2ooDs7FyjK5zmz/manifest.jsonl",
+      "notes": "400 nature/landscape videos, 1280x704, 121 frames @ 24fps."
+    },
+    "dataset_b": {
+      "display_name": "Dataset B",
+      "manifest": "J:/datasets/dataset_b/manifest.jsonl",
+      "notes": "Optional second dataset for comparison."
+    }
+  },
+  "training": {
+    "mode": "lora",
+    "resolution": "1280x704",
+    "num_frames": 121,
+    "fps": 24,
+    "max_train_seconds": 82800,
+    "max_train_steps": 1000,
+    "train_batch_size": 1,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 0.0001,
+    "lora_rank": 32,
+    "lora_alpha": 32.0,
+    "validation_every": 200,
+    "checkpoint_every": 200,
+    "sample_every": 200,
+    "sample_steps": 30,
+    "num_sample_prompts": 4,
+    "num_workers": 0,
+    "pin_memory": false,
+    "seed": 1234,
+    "early_stop_patience": 2,
+    "early_stop_min_delta": 0.005,
+    "early_stop_warmup_steps": 500
+  },
+  "inference": {
+    "sample_steps": 30,
+    "guidance_scale": 5.0,
+    "max_samples": 8,
+    "seed": 1234
+  }
+}

@@ -1,4 +1,9 @@
-"""YouTube acquisition and clip extraction utilities for miners."""
+"""Source acquisition and clip extraction utilities for miners.
+
+Despite the historical name, this module supports any URL handled by yt-dlp
+(YouTube, Vimeo, Twitch, etc.) and re-encodes clips to the strict v2 spec
+(1280x704, 24fps, 121 frames).
+"""
 
 from __future__ import annotations
 
@@ -8,19 +13,19 @@ import os
 import subprocess
 from pathlib import Path
 
-YT_DLP_DOWNLOAD_TIMEOUT_SECONDS = 300
+from ..protocol import (
+    CLIP_DURATION_SEC,
+    TARGET_FPS,
+    TARGET_HEIGHT,
+    TARGET_NUM_FRAMES,
+    TARGET_WIDTH,
+)
+
+YT_DLP_DOWNLOAD_TIMEOUT_SECONDS = 600
 FFPROBE_TIMEOUT_SEC = 30
-FFMPEG_TIMEOUT_SEC = 120
+FFMPEG_TIMEOUT_SEC = 240
 YTDLP_RETRIES = 2
 logger = logging.getLogger(__name__)
-
-
-def _env_str(name: str, default: str) -> str:
-    value = os.getenv(name)
-    return value if value is not None and value != "" else default
-
-
-TARGET_RESOLUTION = _env_str("TARGET_RESOLUTION", "720")
 
 
 def _build_yt_dlp_cmd(args: list[str]) -> list[str]:
@@ -62,17 +67,19 @@ def read_sources(path: Path) -> list[str]:
     return [line for line in lines if line and not line.startswith("#")]
 
 
-def download_youtube_video(url: str, output_dir: Path) -> Path:
+def download_source_video(url: str, output_dir: Path) -> Path:
+    """Download a video from any yt-dlp supported URL."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_template = str(output_dir / "%(id)s.%(ext)s")
+    output_template = str(output_dir / "%(extractor)s_%(id)s.%(ext)s")
+    # Source resolution should be at least the target resolution; downscale later in ffmpeg.
+    height_floor = TARGET_HEIGHT
     cmd = _build_yt_dlp_cmd(
         [
             "--no-simulate",
             "-f",
             (
-                "bestvideo[height<="
-                f"{TARGET_RESOLUTION}]+bestaudio/"
-                f"best[height<={TARGET_RESOLUTION}]/best"
+                f"bestvideo[height>={height_floor}]+bestaudio/"
+                f"bestvideo+bestaudio/best"
             ),
             "--merge-output-format",
             "mp4",
@@ -83,7 +90,7 @@ def download_youtube_video(url: str, output_dir: Path) -> Path:
             "--no-playlist",
             "--no-overwrites",
             "--print",
-            "%(id)s",
+            "after_move:filepath",
             url,
         ]
     )
@@ -108,17 +115,11 @@ def download_youtube_video(url: str, output_dir: Path) -> Path:
                 )
                 continue
 
-            video_id = ""
             for line in reversed(result.stdout.splitlines()):
                 candidate = line.strip()
-                if candidate:
-                    video_id = candidate
-                    break
-            if video_id:
-                preferred = output_dir / f"{video_id}.mp4"
-                if preferred.exists():
-                    logger.info("yt-dlp download complete url=%s path=%s", url, preferred)
-                    return preferred
+                if candidate and Path(candidate).exists():
+                    logger.info("yt-dlp download complete url=%s path=%s", url, candidate)
+                    return Path(candidate)
 
             mp4_candidates = sorted(
                 output_dir.glob("*.mp4"),
@@ -126,13 +127,21 @@ def download_youtube_video(url: str, output_dir: Path) -> Path:
                 reverse=True,
             )
             if mp4_candidates:
-                logger.info("yt-dlp download complete (fallback) url=%s path=%s", url, mp4_candidates[0])
+                logger.info(
+                    "yt-dlp download complete (fallback) url=%s path=%s",
+                    url,
+                    mp4_candidates[0],
+                )
                 return mp4_candidates[0]
             last_error = RuntimeError("yt-dlp completed but output file was not found")
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.warning("yt-dlp download exception attempt=%d/%d: %s", attempt, YTDLP_RETRIES, exc)
             last_error = exc
     raise RuntimeError(f"failed to download source video for url={url}") from last_error
+
+
+# Back-compat alias retained for any external callers.
+download_youtube_video = download_source_video
 
 
 def probe_video(path: Path) -> dict:
@@ -158,8 +167,15 @@ def probe_video(path: Path) -> dict:
     return payload
 
 
-def create_clip(src: Path, dst: Path, start_sec: float, duration_sec: float = 5.0) -> None:
+def create_clip(src: Path, dst: Path, start_sec: float) -> None:
+    """Create a clip re-encoded to the strict spec (1280x704, 24fps, 121 frames, no audio)."""
     dst.parent.mkdir(parents=True, exist_ok=True)
+    # Crop-to-fit then scale to TARGET_WIDTH x TARGET_HEIGHT to preserve aspect on most sources.
+    vf = (
+        f"scale={TARGET_WIDTH}:{TARGET_HEIGHT}:force_original_aspect_ratio=increase,"
+        f"crop={TARGET_WIDTH}:{TARGET_HEIGHT},"
+        f"fps={TARGET_FPS}"
+    )
     cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -170,15 +186,28 @@ def create_clip(src: Path, dst: Path, start_sec: float, duration_sec: float = 5.
         f"{start_sec:.3f}",
         "-i",
         str(src),
-        "-t",
-        f"{duration_sec:.3f}",
+        "-frames:v",
+        str(TARGET_NUM_FRAMES),
+        "-vf",
+        vf,
+        "-an",
         "-c:v",
         "libx264",
-        "-c:a",
-        "aac",
+        "-pix_fmt",
+        "yuv420p",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "20",
         str(dst),
     ]
-    logger.debug("ffmpeg create clip src=%s dst=%s start=%.3f duration=%.3f", src, dst, start_sec, duration_sec)
+    logger.debug(
+        "ffmpeg create clip src=%s dst=%s start=%.3f frames=%d",
+        src,
+        dst,
+        start_sec,
+        TARGET_NUM_FRAMES,
+    )
     _run_command(cmd, timeout_sec=FFMPEG_TIMEOUT_SEC)
 
 
@@ -202,40 +231,13 @@ def extract_first_frame(src: Path, dst: Path) -> None:
     _run_command(cmd, timeout_sec=FFMPEG_TIMEOUT_SEC)
 
 
-def extract_caption_frames(src: Path, output_dir: Path, frame_count: int = 12) -> list[Path]:
-    """Extract timeline-sampled frames for multimodal captioning."""
-    if frame_count <= 0:
-        return []
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_pattern = output_dir / "caption_%03d.jpg"
-    fps = max(frame_count / 5.0, 0.2)
-    cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        str(src),
-        "-vf",
-        f"fps={fps:.6f}",
-        "-frames:v",
-        str(frame_count),
-        str(output_pattern),
-    ]
+def get_video_duration_sec(path: Path) -> float:
+    info = probe_video(path)
+    duration_str = info.get("format", {}).get("duration")
     try:
-        logger.debug(
-            "ffmpeg extract caption frames src=%s out_dir=%s frame_count=%d fps=%.6f",
-            src,
-            output_dir,
-            frame_count,
-            fps,
-        )
-        _run_command(cmd, timeout_sec=FFMPEG_TIMEOUT_SEC)
-    except Exception:
-        logger.warning("caption frame extraction failed src=%s", src)
-        return []
-    frames = sorted(output_dir.glob("caption_*.jpg"))
-    logger.debug("caption frame extraction complete src=%s extracted=%d", src, len(frames))
-    return frames[:frame_count]
+        return float(duration_str)
+    except (TypeError, ValueError):
+        return 0.0
 
+
+_ = (CLIP_DURATION_SEC, os)  # quiet unused import warnings; CLIP_DURATION_SEC kept for callers

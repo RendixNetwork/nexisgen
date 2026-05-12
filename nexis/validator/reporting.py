@@ -1,4 +1,4 @@
-"""Validator-side HTTP reporter for signed interval decisions."""
+"""Validator-side HTTP reporter for signed API requests."""
 
 from __future__ import annotations
 
@@ -12,8 +12,6 @@ from typing import Any
 from urllib.parse import urlencode, urlparse, urlunparse
 
 import httpx
-
-from ..models import ValidationDecision
 
 logger = logging.getLogger(__name__)
 
@@ -32,29 +30,6 @@ def build_auth_message(
 ) -> bytes:
     raw = f"{method.upper()}|{path}|{body_sha256}|{timestamp}|{nonce}"
     return raw.encode("utf-8")
-
-
-def decision_to_payload(decision: ValidationDecision) -> dict[str, Any]:
-    notes = decision.notes or {}
-    return {
-        "miner_hotkey": decision.miner_hotkey,
-        "accepted": bool(decision.accepted),
-        "failures": list(decision.failures),
-        "record_count": int(decision.record_count),
-        "global_overlap_pruned_count": int(notes.get("global_overlap_pruned_count", 0) or 0),
-        "cross_miner_overlap_pruned_count": int(
-            notes.get("cross_miner_overlap_pruned_count", 0) or 0
-        ),
-    }
-
-
-def build_interval_payload(interval_id: int, decisions: list[ValidationDecision]) -> bytes:
-    payload = {
-        "interval_id": int(interval_id),
-        "decisions": [decision_to_payload(item) for item in decisions],
-    }
-    # Compact JSON keeps body hash deterministic.
-    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 @dataclass
@@ -77,18 +52,10 @@ class ValidationResultReporter:
             response = await client.get(url, headers=headers)
             return int(response.status_code), bytes(response.content)
 
-    async def report_interval(
-        self,
-        *,
-        interval_id: int,
-        decisions: list[ValidationDecision],
-    ) -> bool:
-        if not self.endpoint_url or not decisions:
-            return False
-
-        body = build_interval_payload(interval_id, decisions)
-        endpoint = self._resolve_validation_results_url()
-        endpoint_path = self._endpoint_path(endpoint, default="/v1/validation-results")
+    async def post_training_scores(self, *, payload: dict[str, Any]) -> bool:
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        endpoint = self._join_api_path("/v1/training-scores")
+        endpoint_path = "/v1/training-scores"
         headers = self._build_auth_headers(
             method="POST",
             path=endpoint_path,
@@ -99,36 +66,28 @@ class ValidationResultReporter:
             status_code = await self._post_async(endpoint, body, headers)
             if status_code < 200 or status_code >= 300:
                 logger.warning(
-                    "validation evidence POST failed interval=%d status=%d",
-                    interval_id,
+                    "training-scores POST failed status=%d cycle=%s",
                     status_code,
+                    payload.get("cycle_id"),
                 )
                 return False
             logger.info(
-                "validation evidence submitted interval=%d decisions=%d",
-                interval_id,
-                len(decisions),
+                "training-scores submitted cycle=%s miners=%d",
+                payload.get("cycle_id"),
+                len(payload.get("scores") or {}),
             )
             return True
         except Exception as exc:
-            logger.warning("validation evidence report failed interval=%d error=%s", interval_id, exc)
+            logger.warning("training-scores POST failed error=%s", exc)
             return False
 
-    async def fetch_invalid_hotkeys(self, *, interval_id: int) -> list[str]:
+    async def fetch_invalid_hotkeys(self) -> list[str]:
         endpoint = self._join_api_path("/v1/invalid-hotkeys")
-        query = urlencode({"interval_id": int(interval_id)})
-        url = f"{endpoint}?{query}"
-        headers = {
-            "Accept": "application/json",
-        }
+        headers = {"Accept": "application/json"}
         try:
-            status_code, body = await self._get_async(url, headers)
+            status_code, body = await self._get_async(endpoint, headers)
             if status_code < 200 or status_code >= 300:
-                logger.warning(
-                    "invalid hotkeys fetch failed interval=%d status=%d",
-                    interval_id,
-                    status_code,
-                )
+                logger.warning("invalid-hotkeys fetch failed status=%d", status_code)
                 return []
             parsed = json.loads(body.decode("utf-8"))
             values = parsed.get("invalid_hotkeys", [])
@@ -141,14 +100,41 @@ class ValidationResultReporter:
                     deduped.append(hotkey)
             return deduped
         except Exception as exc:
-            logger.warning("invalid hotkeys fetch failed interval=%d error=%s", interval_id, exc)
+            logger.warning("invalid-hotkeys fetch failed error=%s", exc)
             return []
+
+    async def post_invalid_hotkeys(self, *, invalid_hotkeys: list[str]) -> bool:
+        endpoint = self._join_api_path("/v1/invalid-hotkeys")
+        body = json.dumps(
+            {
+                "invalid_hotkeys": sorted({item.strip() for item in invalid_hotkeys if item.strip()}),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        headers = self._build_auth_headers(method="POST", path="/v1/invalid-hotkeys", body=body)
+        headers["Content-Type"] = "application/json"
+        try:
+            status_code = await self._post_async(endpoint, body, headers)
+            if status_code < 200 or status_code >= 300:
+                logger.warning(
+                    "invalid-hotkeys POST failed status=%d count=%d",
+                    status_code,
+                    len(invalid_hotkeys),
+                )
+                return False
+            return True
+        except Exception as exc:
+            logger.warning(
+                "invalid-hotkeys POST failed error=%s count=%d",
+                exc,
+                len(invalid_hotkeys),
+            )
+            return False
 
     async def fetch_blacklist_hotkeys(self) -> list[str]:
         endpoint = self._join_api_path("/v1/get_blacklist")
-        headers = {
-            "Accept": "application/json",
-        }
+        headers = {"Accept": "application/json"}
         try:
             status_code, body = await self._get_async(endpoint, headers)
             if status_code < 200 or status_code >= 300:
@@ -168,64 +154,12 @@ class ValidationResultReporter:
             logger.warning("blacklist hotkeys fetch failed error=%s", exc)
             return []
 
-    async def post_invalid_hotkeys(self, *, interval_id: int, invalid_hotkeys: list[str]) -> bool:
-        endpoint = self._join_api_path("/v1/invalid-hotkeys")
-        body = json.dumps(
-            {
-                "interval_id": int(interval_id),
-                "invalid_hotkeys": sorted({item.strip() for item in invalid_hotkeys if item.strip()}),
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        endpoint_path = self._endpoint_path(endpoint, default="/v1/invalid-hotkeys")
-        headers = self._build_auth_headers(
-            method="POST",
-            path=endpoint_path,
-            body=body,
-        )
-        headers["Content-Type"] = "application/json"
-        try:
-            status_code = await self._post_async(endpoint, body, headers)
-            if status_code < 200 or status_code >= 300:
-                logger.warning(
-                    "invalid hotkeys POST failed interval=%d status=%d count=%d",
-                    interval_id,
-                    status_code,
-                    len(invalid_hotkeys),
-                )
-                return False
-            return True
-        except Exception as exc:
-            logger.warning(
-                "invalid hotkeys POST failed interval=%d error=%s count=%d",
-                interval_id,
-                exc,
-                len(invalid_hotkeys),
-            )
-            return False
-
-    def _resolve_validation_results_url(self) -> str:
-        parsed = urlparse(self.endpoint_url)
-        if parsed.scheme and parsed.netloc:
-            if parsed.path and parsed.path != "/":
-                return self.endpoint_url
-            return self._join_api_path("/v1/validation-results")
-        return self.endpoint_url
-
     def _join_api_path(self, path: str) -> str:
         parsed = urlparse(self.endpoint_url)
         if parsed.scheme and parsed.netloc:
             return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
         base = self.endpoint_url.rstrip("/")
         return f"{base}{path}"
-
-    def _endpoint_path(self, endpoint_url: str, *, default: str) -> str:
-        try:
-            parsed = urlparse(endpoint_url)
-            return parsed.path or default
-        except Exception:
-            return default
 
     def _build_auth_headers(self, *, method: str, path: str, body: bytes) -> dict[str, str]:
         timestamp = int(time.time())
@@ -245,3 +179,7 @@ class ValidationResultReporter:
             "X-Timestamp": str(timestamp),
             "X-Nonce": nonce,
         }
+
+
+# Quiet `urlencode` import-only warning (used for legacy callers).
+_ = urlencode

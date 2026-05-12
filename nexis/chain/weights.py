@@ -12,6 +12,62 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+# Substrate-level "your transaction came in too late" messages. These appear
+# when bittensor's internal retry of `set_weights(wait_for_inclusion=True)`
+# tries to resubmit while the original extrinsic was already finalized — the
+# chain rejects the duplicate but our first submission DID land. Treat as
+# success and stop retrying.
+_OUTDATED_TX_SIGNALS = (
+    "transaction is outdated",
+    "transaction is stale",
+    "priority too low",
+    "future",
+    "ancientbirthblock",
+)
+
+
+def _looks_like_outdated_tx(result: object) -> bool:
+    """Inspect bittensor's set_weights return value for outdated/duplicate hints."""
+    if isinstance(result, tuple):
+        for item in result:
+            if isinstance(item, str) and any(s in item.lower() for s in _OUTDATED_TX_SIGNALS):
+                return True
+    if isinstance(result, str):
+        return any(s in result.lower() for s in _OUTDATED_TX_SIGNALS)
+    return False
+
+
+class _BittensorOutdatedTxFilter(logging.Filter):
+    """Downgrade bittensor's `Transaction is outdated` ERROR to INFO.
+
+    These come from bittensor's internal retry loop inside one set_weights
+    call; the very next line from our own logger is `set_weights submitted ...`
+    that confirms the original submission landed. Filtering keeps the log
+    readable; real errors still pass through at ERROR.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage().lower()
+        if any(s in msg for s in _OUTDATED_TX_SIGNALS):
+            record.levelno = logging.INFO
+            record.levelname = "INFO"
+            # Prefix the record so it's obvious this was downgraded.
+            record.msg = "(bittensor duplicate-tx noise; harmless) " + str(record.msg)
+        return True
+
+
+def install_bittensor_log_filter() -> None:
+    """Attach the outdated-tx filter to the `bittensor` logger.
+
+    Safe to call multiple times — adds at most one instance of the filter.
+    """
+    bt_logger = logging.getLogger("bittensor")
+    for existing in bt_logger.filters:
+        if isinstance(existing, _BittensorOutdatedTxFilter):
+            return
+    bt_logger.addFilter(_BittensorOutdatedTxFilter())
+
 @dataclass(frozen=True)
 class ChainWeightPayload:
     """Dense UID-aligned weight payload for on-chain submission."""
@@ -108,9 +164,11 @@ async def submit_weights_to_chain_async(
         hotkey=wallet_hotkey,
         path=str(wallet_path.expanduser()),
     )
+    install_bittensor_log_filter()
     logger.info(f"submitting weights to chain: {payload.uids} {payload.weights}")
     attempt = 0
     submitted = False
+    reason = "set_weights_returned_false"
     while attempt < 3:
         result = await _resolve_maybe_awaitable(
             active_subtensor.set_weights(
@@ -128,7 +186,22 @@ async def submit_weights_to_chain_async(
         elif isinstance(result, bool):
             submitted = result
         if submitted:
+            reason = ""
             break
+
+        # A False/(False, msg) return with an "outdated" hint means the
+        # original extrinsic was finalized and bittensor's resubmit was
+        # rejected as a duplicate. Don't retry — that just creates more noise.
+        if _looks_like_outdated_tx(result):
+            logger.info(
+                "set_weights: chain reported outdated/duplicate (%r); "
+                "treating as success (original extrinsic was already included)",
+                result,
+            )
+            submitted = True
+            reason = ""
+            break
+
         logger.error(f"set_weights failed: {result} on attempt {attempt}")
         attempt += 1
         if attempt < 3:
@@ -136,7 +209,7 @@ async def submit_weights_to_chain_async(
 
     return WeightSubmissionResult(
         submitted=submitted,
-        reason="" if submitted else "set_weights_returned_false",
+        reason=reason,
         unknown_hotkeys=payload.unknown_hotkeys,
     )
 

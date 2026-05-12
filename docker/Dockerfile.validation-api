@@ -11,9 +11,23 @@ COPY pyproject.toml README.md ./
 COPY nexis ./nexis
 
 RUN pip install --upgrade pip \
-    && pip install .
+    && pip install . \
+    # bittensor 9.12.2 brings in async-substrate-interface 2.x, whose __init__
+    # crashes when both `scalecodec` and `cyscale` are present (upstream bug:
+    # 2.x both forbids and imports from `scalecodec`). Pin 1.6.4, the last
+    # release without that broken check.
+    && pip install --no-cache-dir "async-substrate-interface==1.6.4"
 
 EXPOSE 8080
 
-CMD ["python", "-m", "uvicorn", "nexis.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]
+# `-u` forces line-buffered stdout/stderr (belt-and-suspenders alongside
+# PYTHONUNBUFFERED=1). `--log-level info` ensures startup banner and access
+# logs are emitted; without it some uvicorn builds suppress everything until
+# the first error.
+CMD ["python", "-u", "-m", "uvicorn", \
+     "nexis.api.app:create_app", \
+     "--factory", \
+     "--host", "0.0.0.0", \
+     "--port", "8080", \
+     "--log-level", "info"]
 

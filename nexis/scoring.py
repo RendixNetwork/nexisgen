@@ -1,75 +1,55 @@
-"""Scoring and weight computation."""
+"""Weight computation from total_score.json."""
 
 from __future__ import annotations
 
-from collections import defaultdict, deque
-from dataclasses import dataclass
+import logging
+from typing import Any
 
-from .protocol import FAILURE_LOOKBACK_INTERVALS, SCORING_EXPONENT
+from .protocol import WEIGHT_DECAY_BASE, WEIGHT_TOP_K
 
-
-@dataclass
-class MinerIntervalScore:
-    miner_hotkey: str
-    interval_id: int
-    accepted: bool
-    passed_sample_count: int
-
-    @property
-    def score(self) -> float:
-        if not self.accepted:
-            return 0.0
-        return float(pow(self.passed_sample_count, SCORING_EXPONENT))
+logger = logging.getLogger(__name__)
 
 
-class WeightComputer:
-    """Normalizes miner scores with failure lookback gating."""
-
-    def __init__(self, lookback: int = FAILURE_LOOKBACK_INTERVALS):
-        self._lookback = lookback
-        self._history: deque[dict[str, bool]] = deque(maxlen=lookback)
-
-    def update_failure_history(self, decisions: dict[str, bool]) -> None:
-        """decisions: hotkey -> accepted."""
-        self._history.append(decisions)
-
-    def has_recent_failure(self, hotkey: str) -> bool:
-        for window in self._history:
-            accepted = window.get(hotkey)
-            if accepted is False:
-                return True
-        return False
-
-    def compute_weights(self, interval_scores: list[MinerIntervalScore]) -> dict[str, float]:
-        raw: dict[str, float] = defaultdict(float)
-        for row in interval_scores:
-            if self.has_recent_failure(row.miner_hotkey):
-                raw[row.miner_hotkey] = 0.0
-                continue
-            raw[row.miner_hotkey] += row.score
-
-        return self.normalize_weights(raw)
-
-    def compute_weights_from_totals(self, score_totals: dict[str, float]) -> dict[str, float]:
-        """Normalize already-accumulated score totals with failure gating."""
-        raw: dict[str, float] = defaultdict(float)
-        for hotkey, total_score in score_totals.items():
-            if self.has_recent_failure(hotkey):
-                raw[hotkey] = 0.0
-                continue
-            raw[hotkey] += float(total_score)
-        return self.normalize_weights(raw)
-
-    def normalize_weights(self, raw_scores: dict[str, float]) -> dict[str, float]:
-        total = sum(raw_scores.values())
-        if total <= 0:
-            return {hotkey: 0.0 for hotkey in raw_scores}
-        return {hotkey: score / total for hotkey, score in raw_scores.items()}
-
-    @staticmethod
-    def score_from_sample_count(sample_count: int) -> float:
-        if sample_count <= 0:
-            return 0.0
-        return float(pow(sample_count, SCORING_EXPONENT))
+def parse_total_score_payload(payload: dict[str, Any] | None) -> dict[str, float]:
+    """Convert a `total_score.json` payload into {hotkey: aggregate}."""
+    if not isinstance(payload, dict):
+        return {}
+    scores = payload.get("scores")
+    if not isinstance(scores, dict):
+        return {}
+    out: dict[str, float] = {}
+    for hotkey, value in scores.items():
+        if isinstance(value, dict):
+            raw = value.get("aggregate", value.get("score"))
+        else:
+            raw = value
+        try:
+            out[str(hotkey)] = float(raw)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
+def compute_top_k_weights(
+    miner_scores: dict[str, float],
+    *,
+    top_k: int = WEIGHT_TOP_K,
+    decay_base: float = WEIGHT_DECAY_BASE,
+) -> dict[str, float]:
+    """Top-K miners by score get geometric weights normalized to sum=1.
+
+    Weights before normalization are [1, decay_base, decay_base^2, ...] for ranks 1..K.
+    Returns empty dict if no positive scores.
+    """
+    positives = [(hotkey, score) for hotkey, score in miner_scores.items() if score > 0.0]
+    positives.sort(key=lambda item: (-item[1], item[0]))
+    selected = positives[:top_k]
+    if not selected:
+        return {}
+    raw_weights: dict[str, float] = {}
+    for rank, (hotkey, _) in enumerate(selected):
+        raw_weights[hotkey] = decay_base**rank
+    total = sum(raw_weights.values())
+    if total <= 0:
+        return {}
+    return {hotkey: value / total for hotkey, value in raw_weights.items()}

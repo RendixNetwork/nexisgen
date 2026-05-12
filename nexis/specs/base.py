@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from pydantic import BaseModel
 
 from ..models import ClipRecord
-from ..validator.assets import SampledAssetVerifier
-from ..validator.checks import CheckResult
 
 
 class DatasetSpec(Protocol):
@@ -17,10 +15,6 @@ class DatasetSpec(Protocol):
     supported_protocol_versions: set[str]
     supported_schema_versions: set[str]
     row_model: type[BaseModel]
-
-    def run_hard_checks(self, records: list[ClipRecord]) -> CheckResult: ...
-
-    def build_asset_verifier(self) -> SampledAssetVerifier | None: ...
 
     def source_identity_key(self, row: ClipRecord) -> str: ...
 

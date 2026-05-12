@@ -13,13 +13,29 @@ RUN apt-get update \
         yt-dlp \
     && rm -rf /var/lib/apt/lists/*
 
+# Docker CLI binary so the container can spawn sibling containers
+# (`nexis validate` runs vbench, `nexis train` runs the trainer image).
+# Pinned to 27.x — covers the Engine API 1.47/1.48 daemons commonly in
+# production. Bump if the host daemon advances further.
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
+
 WORKDIR ${APP_HOME}
 
 COPY pyproject.toml README.md ./
 COPY nexis ./nexis
+# Bundled trainer assets (config + downloader). The `models/` dir is NOT
+# baked into the image — it lives on the host, bind-mounted into the
+# trainer container at runtime (NEXIS_TRAINER_MODELS_DIR) and from there
+# into the spawned `train:latest` sibling.
+COPY config.json download_model.py ./
 
 RUN pip install --upgrade pip \
-    && pip install .
+    && pip install . \
+    # bittensor 9.12.2 brings in async-substrate-interface 2.x, whose __init__
+    # crashes when both `scalecodec` and `cyscale` are present (it's a known
+    # upstream packaging bug — 2.x both forbids and imports from `scalecodec`).
+    # Pin to 1.6.4, the last release without that broken check.
+    && pip install --no-cache-dir "async-substrate-interface==1.6.4"
 
 COPY docker/healthcheck_validator.py /usr/local/bin/healthcheck_validator.py
 RUN chmod 0555 /usr/local/bin/healthcheck_validator.py

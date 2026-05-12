@@ -12,8 +12,10 @@ services:
     volumes:
       - ${NEXIS_VALIDATION_PGDATA:-./data/postgres}:/var/lib/postgresql/data
       - ./sql:/docker-entrypoint-initdb.d:ro
-    ports:
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
+    # No published ports — postgres is reachable only from sibling containers
+    # via the docker default network (validation-api connects to host
+    # `postgres:5432`). To debug locally, use `docker exec -it
+    # nexis-validation-postgres psql ...` from the host.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexis} -d ${POSTGRES_DB:-nexis_validation}"]
       interval: 10s
@@ -30,8 +32,12 @@ services:
       - ${VALIDATION_API_ENV_FILE:-./validation-api.env}
     environment:
       NEXIS_VALIDATION_API_POSTGRES_DSN: postgresql://${POSTGRES_USER:-nexis}:${POSTGRES_PASSWORD:-nexis}@postgres:5432/${POSTGRES_DB:-nexis_validation}
+    # Bind to loopback only.  External traffic reaches the API via nginx on
+    # the host (api.nexisgen.ai → 443 → proxy_pass 127.0.0.1:8080).  Setting
+    # the bind address to 127.0.0.1 blocks the 0.0.0.0 default and makes the
+    # port invisible to the public internet, even with the firewall open.
     ports:
-      - "${VALIDATION_API_PORT:-8080}:8080"
+      - "127.0.0.1:${VALIDATION_API_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy

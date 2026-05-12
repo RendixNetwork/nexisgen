@@ -1,29 +1,51 @@
+"""Validate top-K weight computation."""
+
 from __future__ import annotations
 
-from nexis.scoring import MinerIntervalScore, WeightComputer
+import pytest
+
+from nexis.scoring import compute_top_k_weights, parse_total_score_payload
 
 
-def test_score_from_sample_count_matches_interval_score_semantics() -> None:
-    computer = WeightComputer()
-    assert computer.score_from_sample_count(0) == 0.0
-    assert computer.score_from_sample_count(3) == MinerIntervalScore(
-        miner_hotkey="hk",
-        interval_id=1,
-        accepted=True,
-        passed_sample_count=3,
-    ).score
+def test_top5_weights_normalize() -> None:
+    scores = {f"miner_{i}": 1.0 - i * 0.1 for i in range(7)}
+    weights = compute_top_k_weights(scores, top_k=5)
+    assert len(weights) == 5
+    assert pytest.approx(sum(weights.values()), abs=1e-9) == 1.0
+    ordered = sorted(weights.items(), key=lambda kv: -kv[1])
+    expected = [1, 0.5, 0.25, 0.125, 0.0625]
+    total = sum(expected)
+    for (_, weight), expect in zip(ordered, expected):
+        assert pytest.approx(weight, abs=1e-9) == expect / total
 
 
-def test_compute_weights_from_totals_normalizes() -> None:
-    computer = WeightComputer()
-    weights = computer.compute_weights_from_totals({"hk1": 9.0, "hk2": 3.0})
-    assert weights["hk1"] == 0.75
-    assert weights["hk2"] == 0.25
+def test_top5_weights_handles_fewer_than_k() -> None:
+    scores = {"a": 1.0, "b": 0.5}
+    weights = compute_top_k_weights(scores, top_k=5)
+    assert len(weights) == 2
+    assert pytest.approx(sum(weights.values()), abs=1e-9) == 1.0
 
 
-def test_compute_weights_from_totals_applies_failure_gating() -> None:
-    computer = WeightComputer()
-    computer.update_failure_history({"hk1": False, "hk2": True})
-    weights = computer.compute_weights_from_totals({"hk1": 9.0, "hk2": 3.0})
-    assert weights["hk1"] == 0.0
-    assert weights["hk2"] == 1.0
+def test_top5_weights_skip_zero_scores() -> None:
+    scores = {"a": 0.0, "b": 0.0}
+    weights = compute_top_k_weights(scores, top_k=5)
+    assert weights == {}
+
+
+def test_parse_total_score_payload() -> None:
+    payload = {
+        "cycle_id": 3,
+        "scores": {
+            "alice": {"aggregate": 0.92, "validator_count": 2},
+            "bob": {"aggregate": 0.88},
+            "carol": 0.85,
+        },
+    }
+    parsed = parse_total_score_payload(payload)
+    assert parsed == {"alice": 0.92, "bob": 0.88, "carol": 0.85}
+
+
+def test_parse_total_score_handles_missing() -> None:
+    assert parse_total_score_payload(None) == {}
+    assert parse_total_score_payload({}) == {}
+    assert parse_total_score_payload({"scores": "not_a_dict"}) == {}

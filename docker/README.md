@@ -1,177 +1,78 @@
-# Validator Docker Deployment
+# Nexisgen Docker Deployment (v2)
 
-This directory contains a minimal validator deployment with:
+The `nexis` image runs all four roles via the `command` override:
 
-- Docker image for `nexis validate`
-- automatic image publish from GitHub to Docker Hub
-- automatic local container updates via Watchtower
-- optional Grafana log view (through Loki + Promtail)
+| Role                | Compose file                       | Notes                                              |
+|---------------------|-------------------------------------|----------------------------------------------------|
+| Validator (scoring) | `docker-compose.validator.yml`     | Runs VBench in sibling containers (host docker.sock).|
+| Trainer (owner)     | `docker-compose.trainer.yml`       | NVIDIA GPUs + sibling containers; one stack only.  |
+| Validation API      | `docker-compose.validation-api.yml`| FastAPI + Postgres; writes to `nexis_miner` bucket.|
+| Observability       | `docker-compose.observability.yml` | Optional Loki + Promtail + Grafana.                |
 
-## Files In This Directory
+## Files
 
-- `Dockerfile.validator`: validator image build file
-- `healthcheck_validator.py`: container health check script
-- `docker-compose.validator.yml`: main validator + watchtower stack
-- `docker-compose.owner-sync-worker.yml`: optional owner dataset sync worker stack
-- `validator.env.example`: validator runtime environment template
-- `compose.env.example`: host/compose environment template
+- `Dockerfile.validator` — single image (ffmpeg, yt-dlp, docker CLI, `nexis`).
+- `Dockerfile.validation-api` — FastAPI server image.
+- `healthcheck_validator.py` — accepts `validate`, `mine`, `train`, `commit-credentials`.
+- `validator.env.example`, `trainer.env.example`, `validation-api.env.example` — runtime env templates.
+- `compose.env.example` — host-side compose interpolation vars.
+- `sql/001_validation_evidence.sql` — Postgres bootstrap (matches v2 schema).
 
-Optional log stack:
-
-- `docker-compose.observability.yml`: Loki + Promtail + Grafana services
-- `loki-config.yml`: Loki configuration
-- `promtail.yml`: Promtail scrape and relabel rules
-- `grafana/provisioning/datasources/datasources.yml`: auto-provision Loki datasource
-
-## Quick Start
+## Quick start (validator)
 
 ```bash
 cd docker
-cp validator.env.example validator.env
-cp compose.env.example compose.env
+cp validator.env.example  validator.env
+cp compose.env.example    compose.env
 chmod 600 validator.env compose.env
-```
 
-Edit:
+# Edit the two .env files.  Required at minimum:
+#   compose.env: BT_WALLET_HOST_PATH
+#   validator.env: NEXIS_MINER_ACCOUNT_ID + NEXIS_MINER_READ_*
 
-- `compose.env`: set `BT_WALLET_HOST_PATH` and `NEXIS_VALIDATOR_IMAGE`
-- `validator.env`: fill wallet/network/storage/secrets values
-
-Start validator + watchtower:
-
-```bash
 docker compose --env-file compose.env -f docker-compose.validator.yml up -d
-```
-
-Start owner sync worker (optional):
-
-```bash
-docker compose --env-file compose.env -f docker-compose.owner-sync-worker.yml up -d
-```
-
-Check logs:
-
-```bash
 docker logs -f nexis-validator
-docker logs -f nexis-watchtower
 ```
 
-## GitHub To Docker Hub Publish
+The validator container needs `/var/run/docker.sock` mounted so it can spawn
+`rendixnetwork/vbench:latest` on the host. The compose file already sets that up.
 
-Workflow file:
-
-- `.github/workflows/docker-publish.yml`
-
-Required repository secrets:
-
-- `DOCKERHUB_USERNAME`
-- `DOCKERHUB_TOKEN`
-
-Optional repository variable:
-
-- `DOCKERHUB_IMAGE` (example: `myorg/nexisgen-validator`)
-
-Current behavior:
-
-- every push to `main` builds and pushes:
-  - `latest`
-  - immutable `sha-*` tag
-
-## Watchtower Auto-Update
-
-How updates happen:
-
-- validator service is labeled for Watchtower
-- Watchtower checks registry every `WATCHTOWER_POLL_INTERVAL` seconds
-- when `latest` updates in Docker Hub, Watchtower recreates `nexis-validator`
-
-## Rollback
-
-1. Stop watchtower:
-
-```bash
-docker compose --env-file compose.env -f docker-compose.validator.yml stop watchtower
-```
-
-2. Pin an older digest in `compose.env`:
-
-```bash
-NEXIS_VALIDATOR_IMAGE=docker.io/<namespace>/nexisgen-validator@sha256:<digest>
-```
-
-3. Recreate validator:
-
-```bash
-docker compose --env-file compose.env -f docker-compose.validator.yml up -d validator
-```
-
-4. Start watchtower again:
-
-```bash
-docker compose --env-file compose.env -f docker-compose.validator.yml up -d watchtower
-```
-
-## Optional: Grafana Log View
-
-Grafana does not collect container logs by itself.
-To show validator logs in Grafana, Loki and Promtail are required:
-
-- Promtail reads Docker logs from Docker socket
-- Promtail sends logs to Loki
-- Grafana queries Loki
-
-Start optional observability stack:
-
-```bash
-docker compose --env-file compose.env \
-  -f docker-compose.validator.yml \
-  -f docker-compose.observability.yml \
-  --profile observability \
-  up -d
-```
-
-Access:
-
-- Grafana: `http://localhost:3000` (default `admin/admin`, change immediately)
-
-Explore query example:
-
-- label filter: `compose_service="validator"`
-
-Common pitfall after cleanup/redeploy:
-
-- `promtail.yml` must be a regular file in this directory.
-- If it is accidentally created as a directory, Promtail will crash with:
-  `Unable to parse config: read /etc/promtail/promtail.yml: is a directory`
-
-Quick recovery:
+## Quick start (owner trainer)
 
 ```bash
 cd docker
-rm -rf promtail.yml
-# recreate promtail.yml file from repository version if needed
-docker compose --env-file compose.env \
-  -f docker-compose.validator.yml \
-  -f docker-compose.observability.yml \
-  --profile observability \
-  up -d --force-recreate promtail
-docker logs --tail 50 nexis-promtail
+cp trainer.env.example  trainer.env
+cp compose.env.example  compose.env
+chmod 600 trainer.env compose.env
+
+# Edit:
+#   compose.env: BT_WALLET_HOST_PATH, NEXIS_TRAINER_MODELS_DIR, NEXIS_TRAINER_CONFIG_JSON
+#   trainer.env: NEXIS_MINER_*_KEY (read+write), wallet, owner hotkey
+
+# Populate the model dir on the host once:
+#   cd /path/to/nexisgen && pip install huggingface_hub && python download_model.py
+
+docker compose --env-file compose.env -f docker-compose.trainer.yml up -d
+docker logs -f nexis-trainer
 ```
 
-## Security Notes
+The host paths in `NEXIS_TRAINER_MODELS_DIR`, `NEXIS_TRAINER_CONFIG_JSON`, and
+`NEXIS_TRAINER_EVAL_DIR` are mounted **1:1** into the trainer container so that
+when the trainer asks the host docker daemon to spawn `rendixnetwork/train:latest`
+with `-v <those paths>`, the host actually has files at those locations.
 
-- never commit `validator.env` or `compose.env`
-- use Docker Hub access token, not account password
-- Watchtower requires Docker socket access; run on trusted hosts only
-
-## Validation Evidence API + Postgres
-
-Run the evidence API stack (Postgres + FastAPI):
+## Quick start (validation API)
 
 ```bash
 cd docker
 cp validation-api.env.example validation-api.env
-docker compose --env-file validation-api.env -f docker-compose.validation-api.yml up -d --build
+chmod 600 validation-api.env
+
+# Required: NEXIS_MINER_*_KEY (read+write) so the API can write
+# total_score.json into the shared bucket.
+
+docker compose --env-file validation-api.env \
+  -f docker-compose.validation-api.yml up -d --build
 ```
 
 Default endpoints:
@@ -179,8 +80,60 @@ Default endpoints:
 - API: `http://localhost:8080/healthz`
 - Postgres: `localhost:5432`
 
-Point validators to the API by setting in `validator.env`:
+Validators point at the API by setting in `validator.env`:
 
 ```bash
-NEXIS_VALIDATION_API_URL=http://<api-host>:8080/v1/validation-results
+NEXIS_VALIDATION_API_URL=http://<api-host>:8080/v1/training-scores
 ```
+
+## GitHub → Docker Hub publish
+
+Workflow: `.github/workflows/docker-publish.yml`
+
+Repo secrets required:
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+
+Optional repo variable: `DOCKERHUB_IMAGE` (e.g. `myorg/nexisgen-validator`).
+
+Every push to `main` builds and pushes `latest` plus an immutable `sha-*` tag.
+
+## Watchtower auto-update
+
+`docker-compose.validator.yml` labels the validator for Watchtower; it polls the
+registry every `WATCHTOWER_POLL_INTERVAL` seconds and recreates the container on
+new digests. To freeze a deployment, pin a digest in `compose.env`:
+
+```bash
+NEXIS_VALIDATOR_IMAGE=docker.io/<namespace>/nexisgen-validator@sha256:<digest>
+```
+
+## Optional Grafana log view
+
+```bash
+docker compose --env-file compose.env \
+  -f docker-compose.validator.yml \
+  -f docker-compose.observability.yml \
+  --profile observability up -d
+```
+
+Grafana: `http://localhost:3000` (default `admin/admin` — change immediately).
+Loki query: `compose_service="validator"`.
+
+## Security notes
+
+- Never commit `*.env` files.
+- Use Docker Hub access tokens, not account passwords.
+- Both `validator` and `trainer` stacks mount the host docker socket; run only on
+  trusted hosts.  This is required for sibling-container execution and cannot
+  be sandboxed away.
+
+## Removed in v2
+
+The following compose files / commands were removed when the validator
+workflow switched to train→score:
+
+- `docker-compose.owner-sync-worker.yml` (owner-sync worker)
+- `docker-compose.source-auth-validator.yml` (source-auth loop)
+- `nexis sync-owner-datasets`, `nexis validate-source-auth`

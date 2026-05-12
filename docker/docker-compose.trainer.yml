@@ -1,0 +1,52 @@
+name: nexis-trainer
+
+# Owner-only stack. Runs `nexis train`, which:
+#   * polls the shared `nexis_miner` bucket for the next training cycle
+#   * spawns rendixnetwork/train:latest sibling containers (one per GPU)
+#   * uploads eval outputs to nexis_miner/{cycle_id}/{miner_hotkey}/
+#
+# Requires:
+#   * NVIDIA Container Toolkit on the host (`docker run --gpus` must work).
+#   * The same NEXIS_TRAINER_* host paths must be readable by sibling containers,
+#     which is why model/config/eval/outputs paths are mirrored 1:1 into this
+#     container as well.
+
+services:
+  trainer:
+    image: ${NEXIS_VALIDATOR_IMAGE:-rendixnetwork/nexis:latest}
+    container_name: nexis-trainer
+    restart: unless-stopped
+    env_file:
+      - ${TRAINER_ENV_FILE:-./trainer.env}
+    command: ["train"]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /root/.bittensor:rw,nosuid,nodev,noexec,size=64m,uid=0,gid=0,mode=0700
+    # GPU access for the trainer; sibling containers also request `--gpus device=N`.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${NEXIS_TRAINER_NUM_GPUS:-8}
+              capabilities: [gpu]
+    environment:
+      # 1:1 workdir is mandatory for sibling-container mounts: trainer.py
+      # constructs `-v <workdir>/cycle/<id>/...:...` for sibling trainer/eval
+      # containers and the host daemon resolves the left side on the HOST.
+      NEXIS_WORKDIR: ${NEXIS_WORKDIR_HOST_PATH:-/var/lib/nexis}
+    volumes:
+      - ${NEXIS_WORKDIR_HOST_PATH:-/var/lib/nexis}:${NEXIS_WORKDIR_HOST_PATH:-/var/lib/nexis}
+      - ${BT_WALLET_HOST_PATH:?BT_WALLET_HOST_PATH is required}:/root/.bittensor/wallets:ro
+      # Host docker socket — sibling containers run on the host daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Trainer assets: 1:1 mounts so paths resolve identically inside this
+      # container and inside the spawned rendixnetwork/train:latest containers.
+      - ${NEXIS_TRAINER_MODELS_DIR:?NEXIS_TRAINER_MODELS_DIR is required}:${NEXIS_TRAINER_MODELS_DIR}
+      - ${NEXIS_TRAINER_CONFIG_JSON:?NEXIS_TRAINER_CONFIG_JSON is required}:${NEXIS_TRAINER_CONFIG_JSON}
+      # NB: eval data is no longer mounted from a static host dir. The
+      # trainer downloads the canonical eval dataset from the nexis-eval
+      # bucket into `<NEXIS_WORKDIR>/eval_data/` at the start of every
+      # training cycle; the workdir is mirrored 1:1 above, so spawned
+      # trainer containers see the fresh data via that mount.

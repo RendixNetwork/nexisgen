@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nexisgen"
-version = "0.2.6"
+version = "1.0.0"
 description = "Nexisgen subnet miner/validator implementation."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -17,6 +17,11 @@ dependencies = [
   "pyarrow>=14.0.0",
   "aiobotocore>=2.13.0",
   "bittensor==9.12.2",
+  # bittensor 9.12.2 transitively brings in async-substrate-interface; 2.x has
+  # a broken __init__ that crashes if `scalecodec` is installed (which it must
+  # be — async-substrate-interface 2.x itself imports from `scalecodec`).
+  # 1.6.4 is the last release without that check.
+  "async-substrate-interface==1.6.4",
   "openai>=1.40.0",
   "yt-dlp",
   "fastapi",

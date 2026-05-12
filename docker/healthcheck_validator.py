@@ -1,9 +1,14 @@
-"""Container healthcheck for validator runtime."""
+"""Container healthcheck for the nexis runtime.
+
+Returns 0 when PID 1 is `nexis <subcommand>` (validate, mine, train, etc.).
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 import sys
+
+_KNOWN_SUBCOMMANDS = {"validate", "mine", "train", "commit-credentials"}
 
 
 def main() -> int:
@@ -12,10 +17,14 @@ def main() -> int:
     except OSError:
         return 1
 
-    command = raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip().lower()
-    if "nexis" in command and "validate" in command:
-        return 0
-    return 1
+    parts = [p for p in raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").split() if p]
+    if not parts:
+        return 1
+    if not any("nexis" in part.lower() for part in parts):
+        return 1
+    if not any(sub in parts for sub in _KNOWN_SUBCOMMANDS):
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

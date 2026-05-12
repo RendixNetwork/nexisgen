@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from .youtube import (
     create_clip,
-    download_youtube_video,
-    extract_caption_frames,
+    download_source_video,
     extract_first_frame,
     probe_video,
     read_sources,
@@ -25,40 +24,46 @@ class SourceProvider(Protocol):
 
     def probe(self, path: Path) -> dict[str, Any]: ...
 
-    def create_clip(self, src: Path, dst: Path, start_sec: float, duration_sec: float) -> None: ...
+    def create_clip(self, src: Path, dst: Path, start_sec: float) -> None: ...
 
     def extract_first_frame(self, src: Path, dst: Path) -> None: ...
 
-    def extract_caption_frames(self, src: Path, output_dir: Path, frame_count: int) -> list[Path]: ...
 
-
-class YouTubeSourceProvider:
-    """Default source provider for video_v1."""
+class GenericSourceProvider:
+    """yt-dlp-backed provider that supports any public video platform."""
 
     def read_sources(self, path: Path) -> list[str]:
         return read_sources(path)
 
     def source_video_id(self, url: str) -> str:
         parsed = urlparse(url)
-        if parsed.netloc.endswith("youtu.be"):
-            return parsed.path.strip("/")
-        query = parsed.query
-        for part in query.split("&"):
-            if part.startswith("v="):
-                return part.split("=", 1)[1]
-        return parsed.path.strip("/").replace("/", "_")
+        host = (parsed.hostname or "").lower()
+        if host == "youtu.be":
+            return parsed.path.strip("/") or url
+        if host == "youtube.com" or host.endswith(".youtube.com"):
+            query = parse_qs(parsed.query)
+            values = query.get("v", [])
+            if values and values[0].strip():
+                return values[0].strip()
+            parts = [part for part in parsed.path.split("/") if part]
+            if len(parts) >= 2 and parts[0] in {"shorts", "embed", "v"}:
+                return parts[1]
+        if host:
+            return f"{host}_{parsed.path.strip('/').replace('/', '_') or 'root'}"
+        return url
 
     def download(self, url: str, output_dir: Path) -> Path:
-        return download_youtube_video(url, output_dir)
+        return download_source_video(url, output_dir)
 
     def probe(self, path: Path) -> dict[str, Any]:
         return probe_video(path)
 
-    def create_clip(self, src: Path, dst: Path, start_sec: float, duration_sec: float) -> None:
-        create_clip(src, dst, start_sec, duration_sec)
+    def create_clip(self, src: Path, dst: Path, start_sec: float) -> None:
+        create_clip(src, dst, start_sec)
 
     def extract_first_frame(self, src: Path, dst: Path) -> None:
         extract_first_frame(src, dst)
 
-    def extract_caption_frames(self, src: Path, output_dir: Path, frame_count: int) -> list[Path]:
-        return extract_caption_frames(src, output_dir, frame_count=frame_count)
+
+# Back-compat alias.
+YouTubeSourceProvider = GenericSourceProvider

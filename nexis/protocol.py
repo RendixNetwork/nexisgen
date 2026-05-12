@@ -5,39 +5,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-PROTOCOL_VERSION = "1.0.0"
-SCHEMA_VERSION = "1.0.0"
+PROTOCOL_VERSION = "2.0.0"
+SCHEMA_VERSION = "2.0.0"
 
-# Interval semantics (frozen for v1)
-INTERVAL_MODE = "blocks"
-INTERVAL_LENGTH_BLOCKS = 100
+# Dataset spec (frozen for v2 train/validate split).
+SAMPLE_COUNT = 400
+TARGET_WIDTH = 1280
+TARGET_HEIGHT = 704
+TARGET_FPS = 24
+TARGET_NUM_FRAMES = 121
+CLIP_DURATION_SEC = TARGET_NUM_FRAMES / TARGET_FPS  # ≈ 5.0417
+CLIP_DURATION_TOLERANCE_SEC = 0.15
+FPS_TOLERANCE = 0.05
+
+# Overlap policy
+OVERLAP_WINDOW_SEC = 4.5
+GLOBAL_OVERLAP_REJECT_THRESHOLD = 100  # > threshold -> reject
+
+# Weights
 WEIGHT_SUBMISSION_INTERVAL_BLOCKS = 300
-UPLOAD_DEADLINE_RESERVED_BLOCKS = 2
-
-# Miner sampling semantics
-MINER_SAMPLE_RATE = 1
-MINER_SAMPLE_MIN = 2
-MINER_SAMPLE_MAX = 35
-
-# Per-miner row sampling semantics
-ROW_SAMPLE_ALL_THRESHOLD = 3
-ROW_SAMPLE_RATE = 0.20
-ROW_SAMPLE_MAX = 3
-
-# Scoring
-SCORING_EXPONENT = 3
-FAILURE_LOOKBACK_INTERVALS = 1
-
-# Data policy
-CLIP_DURATION_SEC = 5.0
-MIN_CLIP_GAP_SEC = 5.0
-
-
-@dataclass(frozen=True)
-class SoftFailurePolicy:
-    """Threshold policy for soft checks."""
-
-    threshold: float = 0.50
+WEIGHT_TOP_K = 5
+WEIGHT_DECAY_BASE = 0.5  # 1, 1/2, 1/4, 1/8, 1/16
 
 
 @dataclass(frozen=True)
@@ -45,4 +33,3 @@ class HardFailurePolicy:
     """Hard checks reject the interval immediately for that miner."""
 
     reject_on_first_violation: bool = True
-
