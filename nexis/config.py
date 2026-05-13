@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     )
 
     # Shared nexis_miner bucket (training outputs + scores)
-    nexis_miner_bucket: str = Field(default="nexis_miner", alias="NEXIS_MINER_BUCKET")
+    nexis_miner_bucket: str = Field(default="nexis-miner", alias="NEXIS_MINER_BUCKET")
     nexis_miner_account_id: str = Field(default="cce499ad4f3a4703b069771d8ff4215a", alias="NEXIS_MINER_ACCOUNT_ID")
     nexis_miner_read_access_key: str = Field(default="c7df3d75bcf89b19e9fccd2866957922", alias="NEXIS_MINER_READ_ACCESS_KEY")
     nexis_miner_read_secret_key: str = Field(default="d04e506a8a155a5e729ada81d2c54f5397f29e061672f2c78bf7b5a2731eda69", alias="NEXIS_MINER_READ_SECRET_KEY")
