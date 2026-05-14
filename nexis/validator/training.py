@@ -541,15 +541,26 @@ async def run_training_cycle(
     )
 
     selected_hotkeys = [c.miner_hotkey for c in candidates]
-    if on_select and selected_hotkeys:
-        maybe = on_select(selected_hotkeys, cycle_id)
+    rejected_hotkeys = [
+        outcome.miner_hotkey for outcome in rejections if outcome.miner_hotkey
+    ]
+    # Mark BOTH accepted and rejected miners as invalid for this network:
+    #   * accepted   → "we already trained on this miner; don't pick again
+    #                   unless they win a top-5 slot"
+    #   * rejected   → "this miner's last upload failed strict validation;
+    #                   don't waste time re-validating the same bad dataset"
+    # Either path keeps a miner out of the eligibility pool until they make
+    # the previous-cycle's top-5 (the only re-entry route).
+    hotkeys_to_invalidate = sorted({*selected_hotkeys, *rejected_hotkeys})
+    if on_select and hotkeys_to_invalidate:
+        maybe = on_select(hotkeys_to_invalidate, cycle_id)
         if asyncio.iscoroutine(maybe):
             await maybe
 
     cycle_result = TrainingCycleResult(
         cycle_id=cycle_id,
         accepted=selected_hotkeys,
-        rejected=[outcome.miner_hotkey for outcome in rejections],
+        rejected=rejected_hotkeys,
     )
 
     cycle_scratch = workdir / "cycle" / str(cycle_id)

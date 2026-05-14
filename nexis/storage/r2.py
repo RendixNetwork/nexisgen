@@ -128,7 +128,7 @@ class R2S3Store:
         ) as client:
             with src.open("rb") as fp:
                 await client.put_object(Bucket=self.credentials.bucket_name, Key=key, Body=fp)
-        logger.info("upload complete bucket=%s key=%s", self.credentials.bucket_name, key)
+        # logger.info("upload complete bucket=%s key=%s", self.credentials.bucket_name, key)
 
     async def download_file(self, key: str, dst: Path) -> bool:
         access, secret = self._select_keys(use_write=False)

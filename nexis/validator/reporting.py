@@ -83,6 +83,7 @@ class ValidationResultReporter:
 
     async def fetch_invalid_hotkeys(self) -> list[str]:
         endpoint = self._join_api_path("/v1/invalid-hotkeys")
+        logger.info(f"invalid hotkeys url:{endpoint}")
         headers = {"Accept": "application/json"}
         try:
             status_code, body = await self._get_async(endpoint, headers)
@@ -134,6 +135,7 @@ class ValidationResultReporter:
 
     async def fetch_blacklist_hotkeys(self) -> list[str]:
         endpoint = self._join_api_path("/v1/get_blacklist")
+        logger.info(f"blacklist hotkeys url: {endpoint}")
         headers = {"Accept": "application/json"}
         try:
             status_code, body = await self._get_async(endpoint, headers)
