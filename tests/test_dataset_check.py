@@ -162,3 +162,60 @@ def test_global_overlap_threshold(tmp_path: Path, global_count: int, threshold_e
     assert overlapped == global_count
     from nexis.protocol import GLOBAL_OVERLAP_REJECT_THRESHOLD
     assert (overlapped > GLOBAL_OVERLAP_REJECT_THRESHOLD) is threshold_exceeded
+
+
+def test_count_index_overlap_symmetric_within_window() -> None:
+    from nexis.validator.dataset_check import build_overlap_index, count_index_overlap
+
+    # Miner A and Miner B share 3 source URLs with starts within 4.5s, 1 outside.
+    a_records: list[ClipRecord] = []
+    b_records: list[ClipRecord] = []
+    for i in range(4):
+        a_records.append(
+            ClipRecord(
+                clip_id=f"a_{i}",
+                clip_uri=f"clips/a_{i}.mp4",
+                clip_sha256="0" * 64,
+                first_frame_uri=f"frames/a_{i}.jpg",
+                first_frame_sha256="1" * 64,
+                source_video_id="v",
+                clip_start_sec=float(i) * 10.0,
+                duration_sec=CLIP_DURATION_SEC,
+                width=TARGET_WIDTH,
+                height=TARGET_HEIGHT,
+                fps=TARGET_FPS,
+                num_frames=TARGET_NUM_FRAMES,
+                source_video_url=f"https://www.youtube.com/watch?v=src_{i}",
+                caption="x",
+            )
+        )
+    # B's first 3 land within 4.5s of A's first 3; the 4th is >4.5s off.
+    b_offsets = [0.5, 1.0, 3.0, 5.5]
+    for i, off in enumerate(b_offsets):
+        b_records.append(
+            ClipRecord(
+                clip_id=f"b_{i}",
+                clip_uri=f"clips/b_{i}.mp4",
+                clip_sha256="0" * 64,
+                first_frame_uri=f"frames/b_{i}.jpg",
+                first_frame_sha256="1" * 64,
+                source_video_id="v",
+                clip_start_sec=float(i) * 10.0 + off,
+                duration_sec=CLIP_DURATION_SEC,
+                width=TARGET_WIDTH,
+                height=TARGET_HEIGHT,
+                fps=TARGET_FPS,
+                num_frames=TARGET_NUM_FRAMES,
+                source_video_url=f"https://www.youtube.com/watch?v=src_{i}",
+                caption="x",
+            )
+        )
+    a_idx = build_overlap_index(a_records)
+    b_idx = build_overlap_index(b_records)
+    # 3 matches in-window, 1 outside.
+    assert count_index_overlap(a_idx, b_idx) == 3
+    # Symmetric.
+    assert count_index_overlap(b_idx, a_idx) == 3
+    # Empty side -> 0.
+    assert count_index_overlap(a_idx, {}) == 0
+    assert count_index_overlap({}, b_idx) == 0

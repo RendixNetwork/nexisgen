@@ -21,6 +21,10 @@ FPS_TOLERANCE = 0.05
 # Overlap policy
 OVERLAP_WINDOW_SEC = 4.5
 GLOBAL_OVERLAP_REJECT_THRESHOLD = 100  # > threshold -> reject
+# Cross-miner overlap: for any two accepted miners in a cycle, if their
+# datasets share more than this many (canonical_source_url, clip_start_sec)
+# matches (within ±OVERLAP_WINDOW_SEC), the *later* uploader is rejected.
+CROSS_MINER_OVERLAP_REJECT_THRESHOLD = 100
 
 # Weights
 WEIGHT_SUBMISSION_INTERVAL_BLOCKS = 300

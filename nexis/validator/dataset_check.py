@@ -100,6 +100,43 @@ def _count_global_overlap(
     return count
 
 
+def build_overlap_index(records: list[ClipRecord]) -> dict[str, list[float]]:
+    """Build a `{canonical_source_key: [clip_start_sec, ...]}` index for cross-miner
+    overlap counting. Same key shape as the global record-info snapshot."""
+    index: dict[str, list[float]] = {}
+    for row in records:
+        index.setdefault(canonical_source_key(row.source_video_url), []).append(
+            row.clip_start_sec
+        )
+    return index
+
+
+def count_index_overlap(
+    a: dict[str, list[float]],
+    b: dict[str, list[float]],
+) -> int:
+    """Count (source, start) positions in `a` that land within
+    ±OVERLAP_WINDOW_SEC of any entry in `b`. Used for cross-miner overlap:
+    each miner's records are pre-collapsed into an index via
+    `build_overlap_index`, then pairs are compared with this function. The
+    metric is symmetric when neither dataset has internal duplicates (which
+    `_within_dataset_overlap` already enforces in validate_miner_dataset)."""
+    if not a or not b:
+        return 0
+    # Iterate the smaller side for cheaper lookups.
+    if sum(len(v) for v in a.values()) > sum(len(v) for v in b.values()):
+        a, b = b, a
+    count = 0
+    for key, positions in a.items():
+        other = b.get(key)
+        if not other:
+            continue
+        for p in positions:
+            if any(abs(p - q) < OVERLAP_WINDOW_SEC for q in other):
+                count += 1
+    return count
+
+
 def _ffprobe_metadata(path: Path) -> tuple[int, int, float, int]:
     info = probe_video(path)
     stream: dict[str, Any] | None = None

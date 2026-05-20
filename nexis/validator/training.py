@@ -32,11 +32,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..config import Settings
-from ..serialization import read_dataset_parquet
+from ..protocol import CROSS_MINER_OVERLAP_REJECT_THRESHOLD
+from ..serialization import read_dataset_parquet, read_manifest
 from ..storage.r2 import R2S3Store
 from ..storage.shared_bucket import NexisMinerBucket
 from .dataset_check import (
     DatasetCheckOutcome,
+    build_overlap_index,
+    count_index_overlap,
     latest_complete_interval_id,
     validate_miner_dataset,
 )
@@ -396,6 +399,106 @@ async def upload_miner_outputs(
     return True
 
 
+async def _miner_upload_time(
+    store: R2S3Store, interval_id: int, manifest_path: Path
+) -> Any:
+    """Return the most-trustworthy timestamp we have for when this miner
+    uploaded its dataset. Prefer R2's LastModified on dataset.parquet (set
+    by R2 at PUT time, unspoofable by the miner); fall back to the manifest's
+    self-reported `created_at` if the head request fails."""
+    try:
+        ts = await store.get_object_last_modified(f"{interval_id}/dataset.parquet")
+        if ts is not None:
+            return ts
+    except Exception as exc:
+        logger.warning(
+            "last-modified lookup failed interval=%d err=%s", interval_id, exc
+        )
+    try:
+        return read_manifest(manifest_path).created_at
+    except Exception:
+        return None
+
+
+async def _filter_cross_miner_overlap(
+    candidates: list[TrainingCandidate],
+    store_for_hotkey: Callable[[str], R2S3Store],
+) -> tuple[list[TrainingCandidate], list[DatasetCheckOutcome]]:
+    """Reject candidates whose dataset overlaps an *earlier-uploaded* candidate
+    by more than CROSS_MINER_OVERLAP_REJECT_THRESHOLD rows.
+
+    Overlap is measured on (canonical_source_url, clip_start_sec) within
+    ±OVERLAP_WINDOW_SEC. The earlier uploader (by R2 LastModified on
+    dataset.parquet) keeps its slot; later uploaders that exceed the
+    threshold against any kept candidate are dropped.
+    """
+    if len(candidates) < 2:
+        return candidates, []
+
+    enriched: list[tuple[TrainingCandidate, Any, dict[str, list[float]], int]] = []
+    for cand in candidates:
+        parquet_path = cand.miner_dir / "dataset.parquet"
+        manifest_path = cand.miner_dir / "manifest.json"
+        try:
+            records = read_dataset_parquet(parquet_path)
+        except Exception as exc:
+            logger.warning(
+                "cross-miner: parquet re-read failed hotkey=%s err=%s",
+                cand.miner_hotkey,
+                exc,
+            )
+            continue
+        try:
+            store = store_for_hotkey(cand.miner_hotkey)
+            upload_time = await _miner_upload_time(
+                store, cand.interval_id, manifest_path
+            )
+        except Exception:
+            upload_time = None
+        enriched.append((cand, upload_time, build_overlap_index(records), len(records)))
+
+    # Sort by upload_time ascending; ties broken by hotkey for determinism.
+    # Candidates with no resolvable timestamp sort last (they have no priority
+    # claim and cannot displace anyone who does).
+    enriched.sort(
+        key=lambda t: (t[1] is None, t[1], t[0].miner_hotkey)
+    )
+
+    kept: list[tuple[TrainingCandidate, Any, dict[str, list[float]], int]] = []
+    rejections: list[DatasetCheckOutcome] = []
+    for cand, upload_time, index, record_count in enriched:
+        rejected_by: tuple[str, int] | None = None
+        for kept_cand, _, kept_index, _ in kept:
+            count = count_index_overlap(index, kept_index)
+            if count > CROSS_MINER_OVERLAP_REJECT_THRESHOLD:
+                rejected_by = (kept_cand.miner_hotkey, count)
+                break
+        if rejected_by is not None:
+            other_hk, count = rejected_by
+            logger.warning(
+                "cross-miner overlap reject hotkey=%s vs earlier=%s count=%d > %d",
+                cand.miner_hotkey,
+                other_hk,
+                count,
+                CROSS_MINER_OVERLAP_REJECT_THRESHOLD,
+            )
+            rejections.append(
+                DatasetCheckOutcome(
+                    accepted=False,
+                    miner_hotkey=cand.miner_hotkey,
+                    interval_id=cand.interval_id,
+                    record_count=record_count,
+                    failures=[
+                        f"cross_miner_overlap:{other_hk}:{count}"
+                    ],
+                )
+            )
+        else:
+            kept.append((cand, upload_time, index, record_count))
+
+    return [t[0] for t in kept], rejections
+
+
 async def gather_candidates(
     *,
     eligible_hotkeys: list[str],
@@ -477,6 +580,15 @@ async def gather_candidates(
             candidates.append(cand)
         elif outcome is not None:
             rejections.append(outcome)
+
+    # Cross-miner overlap: drop later-uploaders whose datasets duplicate an
+    # earlier accepted miner's by > CROSS_MINER_OVERLAP_REJECT_THRESHOLD rows.
+    # First-uploader wins by R2's LastModified on dataset.parquet (with the
+    # manifest's created_at as a fallback).
+    candidates, cross_miner_rejections = await _filter_cross_miner_overlap(
+        candidates, store_for_hotkey
+    )
+    rejections.extend(cross_miner_rejections)
     return candidates, rejections
 
 
