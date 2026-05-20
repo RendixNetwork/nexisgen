@@ -129,18 +129,69 @@ def _ffprobe_metadata(path: Path) -> tuple[int, int, float, int]:
     return width, height, fps, num_frames
 
 
+_DOWNLOAD_BACKOFF_BASE_SEC = 1.0
+
+
+async def _download_with_retry(
+    miner_store: Any,
+    key: str,
+    dst: Path,
+    *,
+    max_attempts: int = 3,
+) -> bool:
+    """Call `download_file` with bounded retries + exponential backoff.
+
+    `R2S3Store.download_file` swallows all errors and returns False for both
+    "object not found" and transient network/TLS failures, so a transient R2
+    hiccup is indistinguishable from a permanent 404 at this layer. Retry
+    on every False/exception — a real 404 costs a few extra seconds; a
+    transient failure recovers instead of failing the whole miner.
+
+    `download_file` only writes `dst` on full success, so a failed attempt
+    leaves the previous state intact and the next attempt is safe to repeat.
+    """
+    attempts = max(1, int(max_attempts))
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            if await miner_store.download_file(key, dst):
+                if attempt > 1:
+                    logger.info(
+                        "download recovered key=%s on attempt %d/%d",
+                        key,
+                        attempt,
+                        attempts,
+                    )
+                return True
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "download exception key=%s attempt=%d/%d err=%s",
+                key,
+                attempt,
+                attempts,
+                exc,
+            )
+        if attempt < attempts:
+            backoff = _DOWNLOAD_BACKOFF_BASE_SEC * (2 ** (attempt - 1))
+            await asyncio.sleep(backoff)
+    if last_exc is None:
+        logger.warning("download failed key=%s after %d attempts", key, attempts)
+    return False
+
+
 async def _download_with_sem(
     sem: asyncio.Semaphore,
     miner_store: Any,
     key: str,
     dst: Path,
+    *,
+    max_attempts: int = 3,
 ) -> bool:
     async with sem:
-        try:
-            return bool(await miner_store.download_file(key, dst))
-        except Exception as exc:
-            logger.warning("download exception key=%s err=%s", key, exc)
-            return False
+        return await _download_with_retry(
+            miner_store, key, dst, max_attempts=max_attempts
+        )
 
 
 async def validate_miner_dataset(
@@ -151,6 +202,7 @@ async def validate_miner_dataset(
     workdir: Path,
     global_record_index: dict[str, list[float]] | None = None,
     download_concurrency: int = 16,
+    download_retry_attempts: int = 3,
 ) -> DatasetCheckOutcome:
     """Download miner dataset for `interval_id`, validate strict spec + overlaps.
 
@@ -168,7 +220,12 @@ async def validate_miner_dataset(
 
     # 1) manifest
     manifest_local = miner_dir / "manifest.json"
-    ok = await miner_store.download_file(f"{base_key}/manifest.json", manifest_local)
+    ok = await _download_with_retry(
+        miner_store,
+        f"{base_key}/manifest.json",
+        manifest_local,
+        max_attempts=download_retry_attempts,
+    )
     if not ok or not manifest_local.exists():
         out.failures.append("manifest_missing")
         return out
@@ -189,7 +246,12 @@ async def validate_miner_dataset(
 
     # 2) dataset.parquet
     dataset_local = miner_dir / "dataset.parquet"
-    ok = await miner_store.download_file(f"{base_key}/dataset.parquet", dataset_local)
+    ok = await _download_with_retry(
+        miner_store,
+        f"{base_key}/dataset.parquet",
+        dataset_local,
+        max_attempts=download_retry_attempts,
+    )
     if not ok or not dataset_local.exists():
         out.failures.append("dataset_missing")
         return out
@@ -240,12 +302,24 @@ async def validate_miner_dataset(
         download_specs.append((row, clip_local, frame_local))
         download_tasks.append(
             asyncio.create_task(
-                _download_with_sem(sem, miner_store, f"{base_key}/{clip_uri}", clip_local)
+                _download_with_sem(
+                    sem,
+                    miner_store,
+                    f"{base_key}/{clip_uri}",
+                    clip_local,
+                    max_attempts=download_retry_attempts,
+                )
             )
         )
         download_tasks.append(
             asyncio.create_task(
-                _download_with_sem(sem, miner_store, f"{base_key}/{frame_uri}", frame_local)
+                _download_with_sem(
+                    sem,
+                    miner_store,
+                    f"{base_key}/{frame_uri}",
+                    frame_local,
+                    max_attempts=download_retry_attempts,
+                )
             )
         )
     download_results = await asyncio.gather(*download_tasks)
