@@ -115,10 +115,22 @@ async def select_eligible_hotkeys(
     *,
     candidate_hotkeys: list[str],
     invalid_hotkeys: set[str],
+    blacklist_hotkeys: set[str],
     last_winners: set[str],
 ) -> list[str]:
+    """Pick miners to validate this cycle.
+
+    Eligibility rule:
+        (last_winner OR not in invalid_hotkeys) AND not in blacklist_hotkeys
+
+    Blacklisted hotkeys are unconditionally excluded — winning the previous
+    cycle does not grant an exemption from the blacklist. `invalid_hotkeys`
+    is the soft "already-selected" set that last cycle's winners can override.
+    """
     eligible: list[str] = []
     for hotkey in candidate_hotkeys:
+        if hotkey in blacklist_hotkeys:
+            continue
         if hotkey in last_winners or hotkey not in invalid_hotkeys:
             eligible.append(hotkey)
     return eligible
@@ -616,6 +628,7 @@ async def run_training_cycle(
     settings: Settings,
     candidate_hotkeys: list[str],
     invalid_hotkeys: set[str],
+    blacklist_hotkeys: set[str],
     last_total_score: dict[str, Any] | None,
     store_for_hotkey: Callable[[str], R2S3Store],
     nexis_miner: NexisMinerBucket,
@@ -630,13 +643,17 @@ async def run_training_cycle(
     eligible = await select_eligible_hotkeys(
         candidate_hotkeys=candidate_hotkeys,
         invalid_hotkeys=invalid_hotkeys,
+        blacklist_hotkeys=blacklist_hotkeys,
         last_winners=last_winners,
     )
     logger.info(
-        "training cycle=%d candidates=%d eligible=%d last_winners=%d",
+        "training cycle=%d candidates=%d eligible=%d invalid=%d blacklist=%d "
+        "last_winners=%d",
         cycle_id,
         len(candidate_hotkeys),
         len(eligible),
+        len(invalid_hotkeys),
+        len(blacklist_hotkeys),
         len(last_winners),
     )
 

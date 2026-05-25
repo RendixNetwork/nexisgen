@@ -431,9 +431,12 @@ async def _run_train_loop(
                 committed_hotkeys = [hk for hk in hotkeys if committed_payload.get(hk)]
 
                 invalid_hotkeys: set[str] = set()
+                blacklist_hotkeys: set[str] = set()
                 if reporter is not None:
-                    invalid_hotkeys = set(await reporter.fetch_invalid_hotkeys())
-                    invalid_hotkeys |= {
+                    invalid_hotkeys = {
+                        item for item in await reporter.fetch_invalid_hotkeys() if item
+                    }
+                    blacklist_hotkeys = {
                         item for item in await reporter.fetch_blacklist_hotkeys() if item
                     }
 
@@ -487,6 +490,7 @@ async def _run_train_loop(
                     settings=settings,
                     candidate_hotkeys=committed_hotkeys,
                     invalid_hotkeys=invalid_hotkeys,
+                    blacklist_hotkeys=blacklist_hotkeys,
                     last_total_score=last_total_score,
                     store_for_hotkey=store_for_hotkey,
                     nexis_miner=nexis_miner,

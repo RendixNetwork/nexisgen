@@ -39,19 +39,25 @@ def test_parse_last_winners_empty() -> None:
 
 
 @pytest.mark.parametrize(
-    "candidates,invalid,winners,expected",
+    "candidates,invalid,blacklist,winners,expected",
     [
         # Non-invalid candidates pass.
-        (["a", "b"], set(), set(), ["a", "b"]),
+        (["a", "b"], set(), set(), set(), ["a", "b"]),
         # Invalid candidates are dropped.
-        (["a", "b", "c"], {"b"}, set(), ["a", "c"]),
+        (["a", "b", "c"], {"b"}, set(), set(), ["a", "c"]),
         # Last-winners override the invalid mark.
-        (["a", "b"], {"a", "b"}, {"a"}, ["a"]),
+        (["a", "b"], {"a", "b"}, set(), {"a"}, ["a"]),
+        # Blacklist excludes even when it would otherwise be eligible.
+        (["a", "b", "c"], set(), {"b"}, set(), ["a", "c"]),
+        # Blacklist beats last-winner exemption (a is winner+blacklisted -> out;
+        # b is invalid and not a winner -> out).
+        (["a", "b"], {"a", "b"}, {"a"}, {"a"}, []),
     ],
 )
 def test_eligibility_rules(
     candidates: list[str],
     invalid: set[str],
+    blacklist: set[str],
     winners: set[str],
     expected: list[str],
 ) -> None:
@@ -59,6 +65,7 @@ def test_eligibility_rules(
         select_eligible_hotkeys(
             candidate_hotkeys=candidates,
             invalid_hotkeys=invalid,
+            blacklist_hotkeys=blacklist,
             last_winners=winners,
         )
     )
@@ -114,6 +121,7 @@ def test_run_training_cycle_uploads_after_all_training(tmp_path: Path, monkeypat
             settings=fake_settings,
             candidate_hotkeys=["a", "b", "c"],
             invalid_hotkeys=set(),
+            blacklist_hotkeys=set(),
             last_total_score=None,
             store_for_hotkey=lambda hk: SimpleNamespace(),
             nexis_miner=fake_bucket,
