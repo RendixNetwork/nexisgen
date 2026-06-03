@@ -32,12 +32,27 @@ class TrainingScoresIngestResponse(BaseModel):
     miner_count: int = Field(ge=0)
 
 
+class InvalidHotkeyEntry(BaseModel):
+    """One row in the invalid_hotkeys table.
+
+    `reason` is free-form; the validator sends "selected" for hotkeys that
+    passed validation (and were chosen for training) or a `;`-joined list of
+    failure tags for hotkeys rejected by strict validation. `cycle_id` is the
+    training cycle that produced the verdict. Both fields are nullable / may
+    be empty for legacy rows migrated from the pre-reason schema.
+    """
+
+    hotkey: str = Field(min_length=1)
+    reason: str = ""
+    cycle_id: int | None = None
+
+
 class InvalidHotkeysListResponse(BaseModel):
-    invalid_hotkeys: list[str] = Field(default_factory=list)
+    invalid_hotkeys: list[InvalidHotkeyEntry] = Field(default_factory=list)
 
 
 class InvalidHotkeysIngestRequest(BaseModel):
-    invalid_hotkeys: list[str] = Field(default_factory=list)
+    invalid_hotkeys: list[InvalidHotkeyEntry] = Field(default_factory=list)
 
 
 class InvalidHotkeysIngestResponse(BaseModel):

@@ -82,6 +82,13 @@ class ValidationResultReporter:
             return False
 
     async def fetch_invalid_hotkeys(self) -> list[str]:
+        """GET /v1/invalid-hotkeys.
+
+        The API returns rich entries `{hotkey, reason, cycle_id}` (see
+        InvalidHotkeyEntry), but training logic only needs the hotkey set —
+        we flatten to a deduped list[str] here so call sites stay unchanged.
+        Legacy bare-string entries (pre-schema migration) are also accepted.
+        """
         endpoint = self._join_api_path("/v1/invalid-hotkeys")
         logger.info(f"invalid hotkeys url:{endpoint}")
         headers = {"Accept": "application/json"}
@@ -96,7 +103,10 @@ class ValidationResultReporter:
                 return []
             deduped: list[str] = []
             for item in values:
-                hotkey = str(item).strip()
+                if isinstance(item, dict):
+                    hotkey = str(item.get("hotkey", "")).strip()
+                else:
+                    hotkey = str(item).strip()
                 if hotkey and hotkey not in deduped:
                     deduped.append(hotkey)
             return deduped
@@ -104,12 +114,38 @@ class ValidationResultReporter:
             logger.warning("invalid-hotkeys fetch failed error=%s", exc)
             return []
 
-    async def post_invalid_hotkeys(self, *, invalid_hotkeys: list[str]) -> bool:
+    async def post_invalid_hotkeys(
+        self, *, entries: list[dict[str, Any]]
+    ) -> bool:
+        """POST /v1/invalid-hotkeys.
+
+        `entries` is a list of `{hotkey, reason, cycle_id}` dicts. The API
+        upserts on `hotkey`, so re-posting an existing hotkey overwrites its
+        reason/cycle_id (and bumps updated_at). Training uses two reasons:
+            * "selected"        — miner passed validation and was picked
+            * "<failure tags>"  — miner rejected by strict validation
+              (semicolon-joined DatasetCheckOutcome.failures)
+        """
         endpoint = self._join_api_path("/v1/invalid-hotkeys")
+        cleaned: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for entry in entries:
+            hotkey = str(entry.get("hotkey", "")).strip()
+            if not hotkey or hotkey in seen:
+                continue
+            seen.add(hotkey)
+            reason = str(entry.get("reason", "") or "")
+            raw_cycle = entry.get("cycle_id")
+            try:
+                cycle_id = int(raw_cycle) if raw_cycle is not None else None
+            except (TypeError, ValueError):
+                cycle_id = None
+            cleaned.append(
+                {"hotkey": hotkey, "reason": reason, "cycle_id": cycle_id}
+            )
+        cleaned.sort(key=lambda e: e["hotkey"])
         body = json.dumps(
-            {
-                "invalid_hotkeys": sorted({item.strip() for item in invalid_hotkeys if item.strip()}),
-            },
+            {"invalid_hotkeys": cleaned},
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
@@ -121,7 +157,7 @@ class ValidationResultReporter:
                 logger.warning(
                     "invalid-hotkeys POST failed status=%d count=%d",
                     status_code,
-                    len(invalid_hotkeys),
+                    len(cleaned),
                 )
                 return False
             return True
@@ -129,7 +165,7 @@ class ValidationResultReporter:
             logger.warning(
                 "invalid-hotkeys POST failed error=%s count=%d",
                 exc,
-                len(invalid_hotkeys),
+                len(cleaned),
             )
             return False
 

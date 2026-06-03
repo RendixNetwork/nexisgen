@@ -467,13 +467,15 @@ async def _run_train_loop(
                     store_cache[hotkey] = store
                     return store
 
-                async def on_select(selected: list[str], cycle: int) -> None:
-                    if reporter is None or not selected:
+                async def on_select(
+                    entries: list[dict[str, Any]], cycle: int
+                ) -> None:
+                    if reporter is None or not entries:
                         return
-                    await reporter.post_invalid_hotkeys(invalid_hotkeys=selected)
+                    await reporter.post_invalid_hotkeys(entries=entries)
                     logger.info(
                         "submitted %d hotkeys to invalid list cycle=%d",
-                        len(selected),
+                        len(entries),
                         cycle,
                     )
 

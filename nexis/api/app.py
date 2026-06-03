@@ -715,10 +715,14 @@ def create_app() -> FastAPI:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=exc.errors(),
             ) from exc
-        inserted = await repository.add_invalid_hotkeys(hotkeys=payload.invalid_hotkeys)
+        # Upsert: a re-post of an existing hotkey overwrites its reason +
+        # cycle_id, instead of being silently skipped.
+        affected = await repository.upsert_invalid_hotkeys(
+            entries=[entry.model_dump() for entry in payload.invalid_hotkeys]
+        )
         return InvalidHotkeysIngestResponse(
             validator_hotkey=auth.validator_hotkey,
-            saved_count=inserted,
+            saved_count=affected,
         )
 
     @app.delete("/v1/invalid-hotkeys", response_model=InvalidHotkeysResetResponse)

@@ -637,7 +637,7 @@ async def run_training_cycle(
     workdir: Path,
     global_record_index: dict[str, list[float]],
     eval_data_dir: Path,
-    on_select: Callable[[list[str], int], Any] | None = None,
+    on_select: Callable[[list[dict[str, Any]], int], Any] | None = None,
 ) -> TrainingCycleResult:
     last_winners = parse_last_winners(last_total_score)
     eligible = await select_eligible_hotkeys(
@@ -674,15 +674,37 @@ async def run_training_cycle(
         outcome.miner_hotkey for outcome in rejections if outcome.miner_hotkey
     ]
     # Mark BOTH accepted and rejected miners as invalid for this network:
-    #   * accepted   → "we already trained on this miner; don't pick again
-    #                   unless they win a top-5 slot"
-    #   * rejected   → "this miner's last upload failed strict validation;
-    #                   don't waste time re-validating the same bad dataset"
+    #   * accepted   → reason="selected"; "we already trained on this miner;
+    #                   don't pick again unless they win a top-5 slot"
+    #   * rejected   → reason=";"-joined failure tags; "this miner's last
+    #                   upload failed strict validation; don't waste time
+    #                   re-validating the same bad dataset"
     # Either path keeps a miner out of the eligibility pool until they make
     # the previous-cycle's top-5 (the only re-entry route).
-    hotkeys_to_invalidate = sorted({*selected_hotkeys, *rejected_hotkeys})
-    if on_select and hotkeys_to_invalidate:
-        maybe = on_select(hotkeys_to_invalidate, cycle_id)
+    entries_by_hotkey: dict[str, dict[str, Any]] = {}
+    for outcome in rejections:
+        if not outcome.miner_hotkey:
+            continue
+        reason = ";".join(outcome.failures) if outcome.failures else "rejected"
+        entries_by_hotkey[outcome.miner_hotkey] = {
+            "hotkey": outcome.miner_hotkey,
+            "reason": reason,
+            "cycle_id": cycle_id,
+        }
+    # Selected wins on collision (can't actually happen — a hotkey is either
+    # accepted or rejected — but the override is defensible: selection is the
+    # stronger signal of intent for this cycle).
+    for hotkey in selected_hotkeys:
+        entries_by_hotkey[hotkey] = {
+            "hotkey": hotkey,
+            "reason": "selected",
+            "cycle_id": cycle_id,
+        }
+    invalid_entries = sorted(
+        entries_by_hotkey.values(), key=lambda e: e["hotkey"]
+    )
+    if on_select and invalid_entries:
+        maybe = on_select(invalid_entries, cycle_id)
         if asyncio.iscoroutine(maybe):
             await maybe
 
