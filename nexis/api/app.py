@@ -21,7 +21,7 @@ from ..storage.shared_bucket import (
     build_nexis_miner_credentials,
 )
 from ..validator.dataset_check import canonical_source_key
-from .auth import RequestAuthenticator
+from .auth import RequestAuthenticator, build_score_envelope
 from .db import Database
 from .metagraph_sync import MetagraphAllowlistSync, ValidatorAllowlistCache
 from .repository import ValidationEvidenceRepository
@@ -388,24 +388,34 @@ class TotalScoreCoordinator:
         self._lock = asyncio.Lock()
 
     async def update_for_cycle(
-        self, *, cycle_id: int, validator_hotkey: str, payload: dict
+        self,
+        *,
+        cycle_id: int,
+        validator_hotkey: str,
+        payload: dict,
+        envelope: dict | None = None,
     ) -> tuple[int, dict]:
         """Persist the validator's score blob and rebuild total_score.json.
 
-        Returns (miner_count_in_this_post, total_score_payload). The caller
-        gets the recomputed total so it can drive downstream side-effects
-        (e.g. owner-only record_info update) without re-reading the bucket.
+        If `envelope` is provided (a signed envelope), it is stored verbatim
+        so the submission keeps the validator's signature + exact signed bytes
+        and is independently auditable. `payload` is still used for the
+        in-memory aggregation. Returns (miner_count_in_this_post,
+        total_score_payload). The caller gets the recomputed total so it can
+        drive downstream side-effects (e.g. owner-only record_info update)
+        without re-reading the bucket.
         """
         async with self._lock:
             cycle_dir = self._workdir / str(cycle_id)
             cycle_dir.mkdir(parents=True, exist_ok=True)
 
-            # 1) Upload this validator's raw payload.
+            # 1) Upload this validator's submission (signed envelope if given).
             await self._bucket.upload_validator_score(
                 cycle_id=cycle_id,
                 validator_hotkey=validator_hotkey,
                 payload=payload,
                 workdir=cycle_dir,
+                envelope=envelope,
             )
 
             # 2) Recompute total_score.json from every {validator}.json present.
@@ -648,10 +658,22 @@ def create_app() -> FastAPI:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=exc.errors(),
             ) from exc
+        parsed_body = json.loads(body.decode("utf-8"))
+        # Persist the validator's signature + exact signed bytes alongside the
+        # score so the submission is independently re-verifiable from the
+        # bucket alone (see auth.verify_stored_score / verify_validator_score.py).
+        envelope = build_score_envelope(
+            validator_hotkey=auth.validator_hotkey,
+            scores=parsed_body.get("scores", {}),
+            raw_body=body,
+            auth=auth,
+        )
+        envelope["cycle_id"] = payload.cycle_id
         miner_count, total_payload = await coord.update_for_cycle(
             cycle_id=payload.cycle_id,
             validator_hotkey=auth.validator_hotkey,
-            payload=json.loads(body.decode("utf-8")),
+            payload=parsed_body,
+            envelope=envelope,
         )
         # Push the freshly-computed total_score into the read cache so the
         # next /get_*total_score call sees it without waiting for the

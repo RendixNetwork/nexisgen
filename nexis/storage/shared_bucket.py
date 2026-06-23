@@ -117,10 +117,21 @@ class NexisMinerBucket:
         validator_hotkey: str,
         payload: dict,
         workdir: Path,
+        *,
+        envelope: dict | None = None,
     ) -> None:
+        """Persist a validator's score blob to `{cycle}/{hotkey}.json`.
+
+        If `envelope` is given (a signed envelope from
+        `auth.build_score_envelope`), it is stored verbatim — this preserves
+        the validator's signature + exact signed bytes so the submission is
+        independently auditable. Otherwise the bare `payload` is stored
+        (legacy / unsigned path).
+        """
+        obj = envelope if envelope is not None else payload
         local = workdir / f"{validator_hotkey}.json"
         local.parent.mkdir(parents=True, exist_ok=True)
-        local.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        local.write_text(json.dumps(obj, indent=2, sort_keys=True), encoding="utf-8")
         await self._store.upload_file(
             f"{cycle_id}/{validator_hotkey}.json",
             local,

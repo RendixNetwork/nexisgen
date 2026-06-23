@@ -18,10 +18,13 @@ class _FakeBucket:
         root.mkdir(parents=True, exist_ok=True)
         self.uploaded_total: dict[int, dict] = {}
 
-    async def upload_validator_score(self, *, cycle_id, validator_hotkey, payload, workdir):
+    async def upload_validator_score(
+        self, *, cycle_id, validator_hotkey, payload, workdir, envelope=None
+    ):
         path = self.root / str(cycle_id) / f"{validator_hotkey}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload), encoding="utf-8")
+        obj = envelope if envelope is not None else payload
+        path.write_text(json.dumps(obj), encoding="utf-8")
 
     async def list_validator_score_keys(self, cycle_id):
         cycle_dir = self.root / str(cycle_id)
