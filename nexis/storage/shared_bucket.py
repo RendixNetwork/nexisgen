@@ -158,3 +158,26 @@ class NexisMinerBucket:
 
     async def has_validator_score(self, cycle_id: int, validator_hotkey: str) -> bool:
         return await self._store.object_exists(f"{cycle_id}/{validator_hotkey}.json")
+
+    async def download_validator_score(
+        self, cycle_id: int, validator_hotkey: str, dst: Path
+    ) -> dict | None:
+        """Download `{cycle}/{validator_hotkey}.json` and parse it.
+
+        The stored object may be a signed envelope (`build_score_envelope`)
+        or a bare payload; either way it carries a top-level `scores` dict,
+        which is all `parse_total_score_payload` needs.
+        """
+        key = f"{cycle_id}/{validator_hotkey}.json"
+        ok = await self._store.download_file(key, dst)
+        if not ok or not dst.exists():
+            return None
+        try:
+            return json.loads(dst.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning(
+                "validator score json invalid cycle=%d hotkey=%s",
+                cycle_id,
+                validator_hotkey,
+            )
+            return None

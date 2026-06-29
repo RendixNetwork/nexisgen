@@ -639,17 +639,27 @@ async def _scoring_loop(
         await _sleep_poll(settings.score_poll_sec)
 
 
-async def _find_total_score_cycle(
+async def _find_validator_score_cycle(
     nexis_miner: NexisMinerBucket,
+    validator_hotkey: str,
     *,
     max_lookback: int = 10,
 ) -> tuple[int, dict[str, Any]] | None:
+    """Find the latest cycle for which THIS validator published its own score
+    file `{cycle}/{validator_hotkey}.json`, and return (cycle_id, payload).
+
+    Each validator now sets weight from its own scoring result rather than the
+    aggregated `total_score.json`, so the comparison is keyed on the validator
+    hotkey instead of a shared object.
+    """
     cycles = await nexis_miner.list_cycle_ids()
     for cycle_id in reversed(cycles[-max_lookback:]):
-        if not await nexis_miner.has_total_score(cycle_id):
+        if not await nexis_miner.has_validator_score(cycle_id, validator_hotkey):
             continue
-        local = Path("/tmp") / f"nexis_total_score_{cycle_id}.json"
-        payload = await nexis_miner.download_total_score(cycle_id, local)
+        local = Path("/tmp") / f"nexis_score_{validator_hotkey}_{cycle_id}.json"
+        payload = await nexis_miner.download_validator_score(
+            cycle_id, validator_hotkey, local
+        )
         if isinstance(payload, dict):
             return cycle_id, payload
     return None
@@ -679,10 +689,13 @@ async def _set_weight_loop(
                     await _sleep_poll(settings.block_poll_sec)
                     continue
 
-                found = await _find_total_score_cycle(nexis_miner)
+                found = await _find_validator_score_cycle(
+                    nexis_miner, validator_hotkey
+                )
                 if found is None:
                     logger.info(
-                        "set-weight: no total_score.json found; burning to UID 0"
+                        "set-weight: no %s.json score found; burning to UID 0",
+                        validator_hotkey,
                     )
                     weights_by_hotkey: dict[str, float] = {}
                 else:
@@ -693,8 +706,9 @@ async def _set_weight_loop(
                         top_k=WEIGHT_TOP_K,
                     )
                     logger.info(
-                        "set-weight cycle=%d top_k=%d weights=%s",
+                        "set-weight cycle=%d validator=%s top_k=%d weights=%s",
                         cycle_id,
+                        validator_hotkey,
                         len(weights_by_hotkey),
                         weights_by_hotkey,
                     )
