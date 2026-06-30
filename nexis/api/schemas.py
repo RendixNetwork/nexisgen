@@ -9,15 +9,14 @@ from pydantic import BaseModel, Field
 
 class TrainingScoreEntry(BaseModel):
     aggregate: float = Field(ge=0.0)
-    # Per-dimension aggregate score (VBench `[0]` per dimension), used by the
-    # API to roll up into total_score.json.
+    # Per-dimension aggregate score (VBench `[0]` per dimension).
     dimensions: dict[str, float] = Field(default_factory=dict)
     # Optional: raw VBench dimension blob (`[aggregate, [per_video...]]`)
-    # preserved verbatim in the per-validator JSON so consumers can drill
-    # into the per-video breakdown.  Not used by total_score aggregation.
+    # preserved verbatim in the per-validator score file so consumers can
+    # drill into the per-video breakdown.
     full_dimensions: dict[str, Any] = Field(default_factory=dict)
     # Miner-side interval_id of the dataset that produced these outputs.
-    # Stamped by the trainer in `_done.json`; preserved into total_score.json.
+    # Stamped by the trainer in `_done.json`; preserved into the score file.
     miner_interval_id: int | None = None
 
 
@@ -66,8 +65,3 @@ class InvalidHotkeysResetResponse(BaseModel):
 
 class BlacklistResponse(BaseModel):
     blacklist_hotkeys: list[str] = Field(default_factory=list)
-
-
-class TotalScoreResponse(BaseModel):
-    cycle_id: int = Field(ge=1)
-    scores: dict[str, dict[str, Any]] = Field(default_factory=dict)

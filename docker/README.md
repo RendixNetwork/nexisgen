@@ -68,8 +68,8 @@ cd docker
 cp validation-api.env.example validation-api.env
 chmod 600 validation-api.env
 
-# Required: NEXIS_MINER_*_KEY (read+write) so the API can write
-# total_score.json into the shared bucket.
+# Required: NEXIS_MINER_*_KEY (read+write) so the API can write each
+# validator's `{validator_hotkey}.json` score file into the shared bucket.
 
 docker compose --env-file validation-api.env \
   -f docker-compose.validation-api.yml up -d --build

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from nexis.scoring import compute_top_k_weights, parse_total_score_payload
+from nexis.scoring import compute_top_k_weights, parse_score_payload
 
 
 def test_top5_weights_normalize() -> None:
@@ -32,7 +32,7 @@ def test_top5_weights_skip_zero_scores() -> None:
     assert weights == {}
 
 
-def test_parse_total_score_payload() -> None:
+def test_parse_score_payload() -> None:
     payload = {
         "cycle_id": 3,
         "scores": {
@@ -41,11 +41,11 @@ def test_parse_total_score_payload() -> None:
             "carol": 0.85,
         },
     }
-    parsed = parse_total_score_payload(payload)
+    parsed = parse_score_payload(payload)
     assert parsed == {"alice": 0.92, "bob": 0.88, "carol": 0.85}
 
 
-def test_parse_total_score_handles_missing() -> None:
-    assert parse_total_score_payload(None) == {}
-    assert parse_total_score_payload({}) == {}
-    assert parse_total_score_payload({"scores": "not_a_dict"}) == {}
+def test_parse_score_handles_missing() -> None:
+    assert parse_score_payload(None) == {}
+    assert parse_score_payload({}) == {}
+    assert parse_score_payload({"scores": "not_a_dict"}) == {}

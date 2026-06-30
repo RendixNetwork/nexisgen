@@ -22,7 +22,6 @@ class MinerScore:
     miner_hotkey: str
     aggregate: float
     # `dimensions`: per-dimension aggregate score (the VBench `[0]` value).
-    # Used by the API to roll up into total_score.json.
     dimensions: dict[str, float] = field(default_factory=dict)
     # `full_dimensions`: raw VBench output keyed by dimension name.  Carries
     # the whole `[aggregate, [{video_path, video_results}, ...]]` blob so the

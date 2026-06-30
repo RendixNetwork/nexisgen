@@ -1,4 +1,4 @@
-"""Weight computation from total_score.json."""
+"""Weight computation from a validator score payload."""
 
 from __future__ import annotations
 
@@ -10,8 +10,10 @@ from .protocol import WEIGHT_DECAY_BASE, WEIGHT_TOP_K
 logger = logging.getLogger(__name__)
 
 
-def parse_total_score_payload(payload: dict[str, Any] | None) -> dict[str, float]:
-    """Convert a `total_score.json` payload into {hotkey: aggregate}."""
+def parse_score_payload(payload: dict[str, Any] | None) -> dict[str, float]:
+    """Convert a score payload (`{scores: {hotkey: {aggregate}}}`) into
+    {hotkey: aggregate}. Works on any file with that shape — a per-validator
+    `{validator_hotkey}.json` or the owner's score file."""
     if not isinstance(payload, dict):
         return {}
     scores = payload.get("scores")

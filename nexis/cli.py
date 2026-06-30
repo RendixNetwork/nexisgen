@@ -23,7 +23,7 @@ from .config import Settings, load_settings
 from .miner.captioner import Captioner
 from .miner.pipeline import MinerPipeline
 from .protocol import WEIGHT_SUBMISSION_INTERVAL_BLOCKS, WEIGHT_TOP_K
-from .scoring import compute_top_k_weights, parse_total_score_payload
+from .scoring import compute_top_k_weights, parse_score_payload
 from .storage.eval_data import build_eval_data_store, sync_eval_data
 from .storage.r2 import R2Credentials, R2S3Store, bucket_name_for_hotkey
 from .storage.shared_bucket import (
@@ -416,9 +416,14 @@ async def _run_train_loop(
     async with _open_subtensor(settings.bt_network) as subtensor:
         while True:
             try:
-                cycle_id = await determine_next_cycle_id(nexis_miner)
+                cycle_id = await determine_next_cycle_id(
+                    nexis_miner, validator_hotkey
+                )
                 if cycle_id is None:
-                    logger.info("waiting for previous cycle scoring to finish")
+                    logger.info(
+                        "waiting for %s scoring of previous cycle to finish",
+                        validator_hotkey,
+                    )
                     await _sleep_poll(settings.train_poll_sec)
                     continue
 
@@ -440,11 +445,16 @@ async def _run_train_loop(
                         item for item in await reporter.fetch_blacklist_hotkeys() if item
                     }
 
-                last_total_score = None
+                # last_winners (top-5 exemption from the invalid filter) is now
+                # taken from THIS validator's own previous-cycle score file,
+                # consistent with gating + set-weight reading per-validator
+                # results.
+                last_score = None
                 if cycle_id > 1:
-                    last_total_score = await nexis_miner.download_total_score(
+                    last_score = await nexis_miner.download_validator_score(
                         cycle_id - 1,
-                        settings.workdir / "trainer" / f"prev_total_{cycle_id - 1}.json",
+                        validator_hotkey,
+                        settings.workdir / "trainer" / f"prev_score_{cycle_id - 1}.json",
                     )
 
                 global_record_index = await _load_global_record_index(
@@ -493,7 +503,7 @@ async def _run_train_loop(
                     candidate_hotkeys=committed_hotkeys,
                     invalid_hotkeys=invalid_hotkeys,
                     blacklist_hotkeys=blacklist_hotkeys,
-                    last_total_score=last_total_score,
+                    last_score=last_score,
                     store_for_hotkey=store_for_hotkey,
                     nexis_miner=nexis_miner,
                     pool=pool,
@@ -648,9 +658,8 @@ async def _find_validator_score_cycle(
     """Find the latest cycle for which THIS validator published its own score
     file `{cycle}/{validator_hotkey}.json`, and return (cycle_id, payload).
 
-    Each validator now sets weight from its own scoring result rather than the
-    aggregated `total_score.json`, so the comparison is keyed on the validator
-    hotkey instead of a shared object.
+    Each validator sets weight from its own scoring result, so the comparison
+    is keyed on the validator hotkey instead of a shared aggregated object.
     """
     cycles = await nexis_miner.list_cycle_ids()
     for cycle_id in reversed(cycles[-max_lookback:]):
@@ -700,7 +709,7 @@ async def _set_weight_loop(
                     weights_by_hotkey: dict[str, float] = {}
                 else:
                     cycle_id, payload = found
-                    miner_scores = parse_total_score_payload(payload)
+                    miner_scores = parse_score_payload(payload)
                     weights_by_hotkey = compute_top_k_weights(
                         miner_scores,
                         top_k=WEIGHT_TOP_K,

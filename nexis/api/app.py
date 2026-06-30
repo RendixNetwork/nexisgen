@@ -17,7 +17,6 @@ from ..config import load_settings
 from ..storage.r2 import R2S3Store
 from ..storage.shared_bucket import (
     NexisMinerBucket,
-    TOTAL_SCORE_OBJECT,
     build_nexis_miner_credentials,
 )
 from ..validator.dataset_check import canonical_source_key
@@ -42,10 +41,10 @@ class RecordInfoCoordinator:
     """Owner-only updater for the global overlap snapshot (`record_info.json`).
 
     When the OWNER validator POSTs training scores, we pick the top-5 miners
-    by aggregate from the freshly-computed total_score, fetch each one's
-    `dataset_index.json` from the nexis_miner bucket, canonicalize the source
-    URLs, and merge `(canonical_url, clip_start_sec)` pairs into the existing
-    snapshot.  POSTs from any non-owner validator are no-ops.
+    by aggregate from the owner's own `{owner_hotkey}.json` score file, fetch
+    each one's `dataset_index.json` from the nexis_miner bucket, canonicalize
+    the source URLs, and merge `(canonical_url, clip_start_sec)` pairs into the
+    existing snapshot.  POSTs from any non-owner validator are no-ops.
     """
 
     def __init__(
@@ -95,7 +94,6 @@ class RecordInfoCoordinator:
         *,
         cycle_id: int,
         validator_hotkey: str,
-        total_score_payload: dict,
     ) -> bool:
         """Spawn `maybe_update` as a tracked background task.
 
@@ -103,6 +101,9 @@ class RecordInfoCoordinator:
         disabled or the poster is not the owner.  The task itself logs every
         early-return path so operators can see exactly where the update was
         skipped.
+
+        The ranking source is the owner's own `{cycle}/{owner_hotkey}.json`
+        score file (read inside `_update`).
         """
         if not self.enabled:
             logger.info(
@@ -125,7 +126,6 @@ class RecordInfoCoordinator:
             self.maybe_update(
                 cycle_id=cycle_id,
                 validator_hotkey=validator_hotkey,
-                total_score_payload=total_score_payload,
             ),
             name=f"record-info-update-cycle-{cycle_id}",
         )
@@ -143,7 +143,6 @@ class RecordInfoCoordinator:
         *,
         cycle_id: int,
         validator_hotkey: str,
-        total_score_payload: dict,
     ) -> bool:
         if not self.enabled:
             logger.info(
@@ -168,10 +167,7 @@ class RecordInfoCoordinator:
         )
         async with self._lock:
             try:
-                ok = await self._update(
-                    cycle_id=cycle_id,
-                    total_score_payload=total_score_payload,
-                )
+                ok = await self._update(cycle_id=cycle_id)
             except Exception as exc:
                 logger.exception(
                     "record_info update failed cycle=%d: %s", cycle_id, exc
@@ -182,8 +178,24 @@ class RecordInfoCoordinator:
         )
         return ok
 
-    async def _update(self, *, cycle_id: int, total_score_payload: dict) -> bool:
-        scores = total_score_payload.get("scores")
+    async def _update(self, *, cycle_id: int) -> bool:
+        # Rank from the owner's OWN score file `{cycle}/{owner_hotkey}.json`
+        # (written just before this runs, since the owner is the poster). It
+        # carries the `scores.{hotkey}.aggregate` shape.
+        cycle_dir = self._workdir / f"cycle_{cycle_id}"
+        cycle_dir.mkdir(parents=True, exist_ok=True)
+        owner_local = cycle_dir / f"{self._owner_hotkey}.json"
+        owner_payload = await self._nexis_miner.download_validator_score(
+            cycle_id, self._owner_hotkey, owner_local
+        )
+        if not isinstance(owner_payload, dict):
+            logger.warning(
+                "record_info: owner score file %s.json missing for cycle=%d; skip",
+                self._owner_hotkey,
+                cycle_id,
+            )
+            return False
+        scores = owner_payload.get("scores")
         if not isinstance(scores, dict):
             return False
 
@@ -200,9 +212,6 @@ class RecordInfoCoordinator:
         top = ranked[: self._top_k]
         if not top:
             return False
-
-        cycle_dir = self._workdir / f"cycle_{cycle_id}"
-        cycle_dir.mkdir(parents=True, exist_ok=True)
 
         new_entries: list[tuple[str, float]] = []
         for hotkey, _ in top:
@@ -293,123 +302,36 @@ class RecordInfoCoordinator:
         return True
 
 
-class TotalScoreCache:
-    """In-memory cache of every cycle's `total_score.json` on the shared bucket.
+class ScoreSubmissionCoordinator:
+    """Persist each validator's score submission to `{cycle}/{validator}.json`.
 
-    A background task refreshes the cache every `refresh_sec`. The two read
-    endpoints (`/v1/get_latest_total_score`, `/v1/get_total_score/{cycle_id}`)
-    serve from this cache so frontends don't hit R2 on every page load.
+    Each validator's signed envelope is stored verbatim so the submission keeps
+    the validator's signature + exact signed bytes and is independently
+    auditable. There is no cross-validator aggregation: every consumer
+    (trainer gate, set-weight, record_info, collector) reads the per-validator
+    score files directly.
     """
-
-    def __init__(
-        self,
-        *,
-        bucket: NexisMinerBucket,
-        workdir: Path,
-        refresh_sec: int = 300,
-    ):
-        self._bucket = bucket
-        self._workdir = workdir
-        self._refresh_sec = max(int(refresh_sec), 10)
-        self._cache: dict[int, dict] = {}
-        self._latest_cycle: int | None = None
-        self._lock = asyncio.Lock()
-        self._stop = asyncio.Event()
-        self._task: asyncio.Task[None] | None = None
-
-    async def start(self) -> None:
-        if self._task is not None:
-            return
-        self._stop.clear()
-        self._task = asyncio.create_task(self._run(), name="total-score-cache")
-
-    async def stop(self) -> None:
-        if self._task is None:
-            return
-        self._stop.set()
-        self._task.cancel()
-        try:
-            await self._task
-        except asyncio.CancelledError:
-            pass
-        self._task = None
-
-    async def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                await self.refresh()
-            except Exception as exc:
-                logger.warning("total_score cache refresh failed: %s", exc)
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self._refresh_sec)
-            except asyncio.TimeoutError:
-                continue
-
-    async def refresh(self) -> None:
-        """Walk every cycle dir, pull total_score.json for any cycle that has it."""
-        cycles = await self._bucket.list_cycle_ids()
-        for cycle_id in cycles:
-            if not await self._bucket.has_total_score(cycle_id):
-                continue
-            local = self._workdir / f"total_score_{cycle_id}.json"
-            local.parent.mkdir(parents=True, exist_ok=True)
-            payload = await self._bucket.download_total_score(cycle_id, local)
-            if payload is None:
-                continue
-            async with self._lock:
-                self._cache[cycle_id] = payload
-                if self._latest_cycle is None or cycle_id > self._latest_cycle:
-                    self._latest_cycle = cycle_id
-
-    async def update_one(self, cycle_id: int, payload: dict) -> None:
-        """Drop a known-good payload into the cache without re-fetching."""
-        async with self._lock:
-            self._cache[int(cycle_id)] = payload
-            if self._latest_cycle is None or cycle_id > self._latest_cycle:
-                self._latest_cycle = int(cycle_id)
-
-    async def get(self, cycle_id: int) -> dict | None:
-        async with self._lock:
-            return self._cache.get(int(cycle_id))
-
-    async def get_latest(self) -> tuple[int, dict] | None:
-        async with self._lock:
-            if self._latest_cycle is None:
-                return None
-            return self._latest_cycle, self._cache[self._latest_cycle]
-
-
-class TotalScoreCoordinator:
-    """Aggregate per-validator scores into `total_score.json` on the shared bucket."""
 
     def __init__(self, *, bucket: NexisMinerBucket, workdir: Path):
         self._bucket = bucket
         self._workdir = workdir
         self._lock = asyncio.Lock()
 
-    async def update_for_cycle(
+    async def record_submission(
         self,
         *,
         cycle_id: int,
         validator_hotkey: str,
         payload: dict,
         envelope: dict | None = None,
-    ) -> tuple[int, dict]:
-        """Persist the validator's score blob and rebuild total_score.json.
+    ) -> int:
+        """Upload this validator's score blob (signed envelope if given).
 
-        If `envelope` is provided (a signed envelope), it is stored verbatim
-        so the submission keeps the validator's signature + exact signed bytes
-        and is independently auditable. `payload` is still used for the
-        in-memory aggregation. Returns (miner_count_in_this_post,
-        total_score_payload). The caller gets the recomputed total so it can
-        drive downstream side-effects (e.g. owner-only record_info update)
-        without re-reading the bucket.
+        Returns the number of miners scored in this submission.
         """
         async with self._lock:
             cycle_dir = self._workdir / str(cycle_id)
             cycle_dir.mkdir(parents=True, exist_ok=True)
-
-            # 1) Upload this validator's submission (signed envelope if given).
             await self._bucket.upload_validator_score(
                 cycle_id=cycle_id,
                 validator_hotkey=validator_hotkey,
@@ -417,72 +339,7 @@ class TotalScoreCoordinator:
                 workdir=cycle_dir,
                 envelope=envelope,
             )
-
-            # 2) Recompute total_score.json from every {validator}.json present.
-            score_keys = await self._bucket.list_validator_score_keys(cycle_id)
-            local_files = await self._bucket.download_keys(score_keys, workdir=cycle_dir / "incoming")
-            per_miner_aggs: dict[str, list[float]] = {}
-            per_miner_dims: dict[str, dict[str, list[float]]] = {}
-            per_miner_interval: dict[str, int] = {}
-
-            for path in local_files.values():
-                try:
-                    raw = json.loads(path.read_text(encoding="utf-8"))
-                except Exception:
-                    continue
-                scores = raw.get("scores")
-                if not isinstance(scores, dict):
-                    continue
-                for hotkey, entry in scores.items():
-                    if not isinstance(entry, dict):
-                        # Legacy bare-float entry; treat as the aggregate.
-                        try:
-                            per_miner_aggs.setdefault(str(hotkey), []).append(float(entry))
-                        except (TypeError, ValueError):
-                            pass
-                        continue
-                    try:
-                        agg = float(entry.get("aggregate", entry.get("score", 0)))
-                        per_miner_aggs.setdefault(str(hotkey), []).append(agg)
-                    except (TypeError, ValueError):
-                        pass
-                    dims = entry.get("dimensions")
-                    if isinstance(dims, dict):
-                        bucket = per_miner_dims.setdefault(str(hotkey), {})
-                        for dn, dv in dims.items():
-                            try:
-                                bucket.setdefault(str(dn), []).append(float(dv))
-                            except (TypeError, ValueError):
-                                continue
-                    # Trainer-stamped miner_interval_id is identical across
-                    # validators in the same cycle; record the first one seen.
-                    if hotkey not in per_miner_interval:
-                        miid = entry.get("miner_interval_id")
-                        if miid is not None:
-                            try:
-                                per_miner_interval[str(hotkey)] = int(miid)
-                            except (TypeError, ValueError):
-                                pass
-
-            total_payload = {
-                "cycle_id": int(cycle_id),
-                "scores": {
-                    hotkey: {
-                        "aggregate": sum(values) / len(values),
-                        "validator_count": len(values),
-                        "dimensions": {
-                            dn: sum(dvs) / len(dvs)
-                            for dn, dvs in per_miner_dims.get(hotkey, {}).items()
-                            if dvs
-                        },
-                        "miner_interval_id": per_miner_interval.get(hotkey),
-                    }
-                    for hotkey, values in per_miner_aggs.items()
-                    if values
-                },
-            }
-            await self._bucket.upload_total_score(cycle_id, total_payload, workdir=cycle_dir)
-            return len(payload.get("scores") or {}), total_payload
+            return len(payload.get("scores") or {})
 
 
 def create_app() -> FastAPI:
@@ -536,14 +393,9 @@ def create_app() -> FastAPI:
             "(NEXIS_MINER_ACCOUNT_ID/READ/WRITE_*)"
         )
     bucket = NexisMinerBucket(R2S3Store(creds))
-    coord = TotalScoreCoordinator(
+    coord = ScoreSubmissionCoordinator(
         bucket=bucket,
-        workdir=Path(tempfile.gettempdir()) / "nexis_total_score",
-    )
-    total_score_cache = TotalScoreCache(
-        bucket=bucket,
-        workdir=Path(tempfile.gettempdir()) / "nexis_total_score_cache",
-        refresh_sec=300,
+        workdir=Path(tempfile.gettempdir()) / "nexis_scores",
     )
 
     # Optional: owner-only updates to the global overlap snapshot.  Skipped
@@ -624,25 +476,10 @@ def create_app() -> FastAPI:
         except Exception as exc:
             logger.warning("initial validator allowlist refresh failed: %s", exc)
         await allowlist_sync.start()
-
-        # Warm the total-score cache once at boot so the first /get_*
-        # request doesn't have to wait for the periodic refresh.
-        try:
-            await asyncio.wait_for(total_score_cache.refresh(), timeout=60)
-            logger.info("total_score cache warmed")
-        except asyncio.TimeoutError:
-            logger.warning(
-                "initial total_score cache warm-up timed out after 60s; "
-                "background refresh will retry"
-            )
-        except Exception as exc:
-            logger.warning("initial total_score cache warm-up failed: %s", exc)
-        await total_score_cache.start()
         logger.info("nexis API started")
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
-        await total_score_cache.stop()
         await allowlist_sync.stop()
         await database.close()
         logger.info("nexis API stopped")
@@ -669,57 +506,27 @@ def create_app() -> FastAPI:
             auth=auth,
         )
         envelope["cycle_id"] = payload.cycle_id
-        miner_count, total_payload = await coord.update_for_cycle(
+        miner_count = await coord.record_submission(
             cycle_id=payload.cycle_id,
             validator_hotkey=auth.validator_hotkey,
             payload=parsed_body,
             envelope=envelope,
         )
-        # Push the freshly-computed total_score into the read cache so the
-        # next /get_*total_score call sees it without waiting for the
-        # periodic refresh.
-        await total_score_cache.update_one(payload.cycle_id, total_payload)
         # Owner-only side effect: refresh `record_info.json` from this cycle's
-        # top-5 dataset indexes.  `schedule()` returns True if the task was
-        # actually launched (owner posted, coordinator enabled); False
-        # otherwise — with a log line in either case.  The coordinator holds
-        # a strong reference to the task so it can't be GC'd mid-flight.
+        # top-5 dataset indexes (ranked from the owner's own score file).
+        # `schedule()` returns True if the task was actually launched (owner
+        # posted, coordinator enabled); False otherwise — with a log line in
+        # either case.  The coordinator holds a strong reference to the task so
+        # it can't be GC'd mid-flight.
         record_info_coord.schedule(
             cycle_id=payload.cycle_id,
             validator_hotkey=auth.validator_hotkey,
-            total_score_payload=total_payload,
         )
         return TrainingScoresIngestResponse(
             validator_hotkey=auth.validator_hotkey,
             cycle_id=payload.cycle_id,
             miner_count=miner_count,
         )
-
-    @app.get("/v1/get_latest_total_score")
-    async def get_latest_total_score() -> JSONResponse:
-        result = await total_score_cache.get_latest()
-        if result is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="no total_score available yet",
-            )
-        _, payload = result
-        return JSONResponse(content=payload)
-
-    @app.get("/v1/get_total_score/{cycle_id}")
-    async def get_total_score_for_cycle(cycle_id: int) -> JSONResponse:
-        if cycle_id < 1:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="cycle_id must be >= 1",
-            )
-        payload = await total_score_cache.get(cycle_id)
-        if payload is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"no total_score for cycle {cycle_id}",
-            )
-        return JSONResponse(content=payload)
 
     @app.get("/v1/invalid-hotkeys", response_model=InvalidHotkeysListResponse)
     async def list_invalid_hotkeys() -> InvalidHotkeysListResponse:
@@ -800,17 +607,12 @@ def create_app() -> FastAPI:
                     f"{record_info_coord.disabled_reason()}"
                 ),
             )
-        total = await total_score_cache.get(cycle_id)
-        if total is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"no cached total_score for cycle {cycle_id}",
-            )
-        # Run with the owner_hotkey as the "validator" so the owner check passes.
+        # Run with the owner_hotkey as the "validator" so the owner check
+        # passes; `_update` reads the owner's own `{owner_hotkey}.json` for
+        # this cycle from the bucket.
         updated = await record_info_coord.maybe_update(
             cycle_id=cycle_id,
             validator_hotkey=record_info_coord.owner_hotkey,
-            total_score_payload=total,
         )
         return JSONResponse(content={"cycle_id": cycle_id, "updated": bool(updated)})
 
@@ -818,5 +620,4 @@ def create_app() -> FastAPI:
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    _ = TOTAL_SCORE_OBJECT
     return app

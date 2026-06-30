@@ -136,11 +136,12 @@ async def select_eligible_hotkeys(
     return eligible
 
 
-def parse_last_winners(total_score_payload: dict[str, Any] | None, top_k: int = 5) -> set[str]:
-    """Top-K hotkeys by aggregate score from a `total_score.json` payload."""
-    if not total_score_payload:
+def parse_last_winners(score_payload: dict[str, Any] | None, top_k: int = 5) -> set[str]:
+    """Top-K hotkeys by aggregate score from a score payload
+    (`{scores: {hotkey: {aggregate}}}`)."""
+    if not score_payload:
         return set()
-    scores = total_score_payload.get("scores")
+    scores = score_payload.get("scores")
     if not isinstance(scores, dict):
         return set()
     flat: list[tuple[str, float]] = []
@@ -604,12 +605,22 @@ async def gather_candidates(
     return candidates, rejections
 
 
-async def determine_next_cycle_id(nexis_miner: NexisMinerBucket) -> int | None:
-    """Return the cycle_id to train, or None if the previous cycle hasn't finished scoring."""
+async def determine_next_cycle_id(
+    nexis_miner: NexisMinerBucket, validator_hotkey: str
+) -> int | None:
+    """Return the cycle_id to train, or None if the previous cycle hasn't been
+    scored yet.
+
+    "Scored" is signalled by THIS validator's own score file
+    `{latest}/{validator_hotkey}.json` existing. The owner-trainer therefore
+    advances on its own scoring result instead of waiting for the API to
+    aggregate every validator's submission. (Requires the owner to also run
+    `nexis validate` so its score file is produced.)
+    """
     latest = await nexis_miner.latest_cycle_id()
     if latest is None:
         return 1
-    if not await nexis_miner.has_total_score(latest):
+    if not await nexis_miner.has_validator_score(latest, validator_hotkey):
         return None
     return latest + 1
 
@@ -629,7 +640,7 @@ async def run_training_cycle(
     candidate_hotkeys: list[str],
     invalid_hotkeys: set[str],
     blacklist_hotkeys: set[str],
-    last_total_score: dict[str, Any] | None,
+    last_score: dict[str, Any] | None,
     store_for_hotkey: Callable[[str], R2S3Store],
     nexis_miner: NexisMinerBucket,
     pool: DockerGPUPool,
@@ -639,7 +650,7 @@ async def run_training_cycle(
     eval_data_dir: Path,
     on_select: Callable[[list[dict[str, Any]], int], Any] | None = None,
 ) -> TrainingCycleResult:
-    last_winners = parse_last_winners(last_total_score)
+    last_winners = parse_last_winners(last_score)
     eligible = await select_eligible_hotkeys(
         candidate_hotkeys=candidate_hotkeys,
         invalid_hotkeys=invalid_hotkeys,
