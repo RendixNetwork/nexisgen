@@ -17,33 +17,34 @@ from nexis.validator.training import (
 )
 
 
-def test_determine_next_cycle_id_gates_on_validator_score() -> None:
-    """Cycle advances only when THIS validator's own score file exists for the
-    latest cycle."""
-    HK = "5ValidatorHotkeyAddress"
+def test_determine_next_cycle_id_gates_on_local_score() -> None:
+    """Cycle advances only when THIS validator's LOCAL score for the latest
+    cycle exists — the bucket gives cycle existence, the local store gives
+    'have I scored it'. No API/bucket score-file dependency."""
 
     class _Bucket:
-        def __init__(self, latest, scored_for):
+        def __init__(self, latest):
             self._latest = latest
-            self._scored_for = scored_for  # set of (cycle, hotkey)
 
         async def latest_cycle_id(self):
             return self._latest
 
-        async def has_validator_score(self, cycle_id, validator_hotkey):
-            return (cycle_id, validator_hotkey) in self._scored_for
+        async def has_validator_score(self, *a, **k):  # must NOT be consulted
+            raise AssertionError("gate must read the LOCAL score, not the bucket")
+
+    class _LocalScore:
+        def __init__(self, scored):
+            self._scored = set(scored)
+
+        def has(self, cycle_id):
+            return cycle_id in self._scored
 
     # Empty bucket -> bootstrap to cycle 1.
-    assert asyncio.run(determine_next_cycle_id(_Bucket(None, set()), HK)) == 1
-    # Latest cycle 5 not yet scored by this validator -> wait (None).
-    assert asyncio.run(determine_next_cycle_id(_Bucket(5, set()), HK)) is None
-    # Latest cycle 5 scored by this validator -> advance to 6.
-    assert asyncio.run(determine_next_cycle_id(_Bucket(5, {(5, HK)}), HK)) == 6
-    # Scored by a DIFFERENT validator only -> still wait for ours.
-    assert (
-        asyncio.run(determine_next_cycle_id(_Bucket(5, {(5, "5Other")}), HK))
-        is None
-    )
+    assert asyncio.run(determine_next_cycle_id(_Bucket(None), _LocalScore(set()))) == 1
+    # Latest cycle 5 not yet scored locally -> wait (None).
+    assert asyncio.run(determine_next_cycle_id(_Bucket(5), _LocalScore(set()))) is None
+    # Latest cycle 5 scored locally -> advance to 6.
+    assert asyncio.run(determine_next_cycle_id(_Bucket(5), _LocalScore({5}))) == 6
 
 
 def test_parse_last_winners_top5() -> None:

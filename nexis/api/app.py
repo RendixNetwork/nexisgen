@@ -405,6 +405,107 @@ class EligibilityCache:
                 continue
 
 
+class ScoreCache:
+    """Serve per-cycle scores to the frontend from the OWNER validator's own
+    score file `{cycle}/{owner_hotkey}.json` (there is no aggregated
+    total_score.json anymore — the owner deploys the API, so its view is the
+    canonical one served, consistent with record_info + the collector).
+
+    Score files are immutable once written, so the timer (default 5 min) only
+    fetches cycles not already cached; the owner's POST also pushes the latest
+    cycle in immediately via `update_one`.
+    """
+
+    def __init__(
+        self,
+        *,
+        bucket: NexisMinerBucket,
+        owner_hotkey: str,
+        workdir: Path,
+        refresh_sec: int = 300,
+    ):
+        self._bucket = bucket
+        self._owner_hotkey = owner_hotkey.strip()
+        self._workdir = workdir
+        self._refresh_sec = max(int(refresh_sec), 10)
+        self._cache: dict[int, dict] = {}
+        self._latest_cycle: int | None = None
+        self._lock = asyncio.Lock()
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+
+    async def refresh(self) -> None:
+        if not self._owner_hotkey:
+            return
+        cycles = await self._bucket.list_cycle_ids()
+        for cycle_id in cycles:
+            async with self._lock:
+                already = cycle_id in self._cache
+            if already:
+                continue  # score files are immutable; only fetch new cycles
+            if not await self._bucket.has_validator_score(
+                cycle_id, self._owner_hotkey
+            ):
+                continue
+            local = self._workdir / f"score_{cycle_id}.json"
+            local.parent.mkdir(parents=True, exist_ok=True)
+            payload = await self._bucket.download_validator_score(
+                cycle_id, self._owner_hotkey, local
+            )
+            if payload is None:
+                continue
+            async with self._lock:
+                self._cache[cycle_id] = payload
+                if self._latest_cycle is None or cycle_id > self._latest_cycle:
+                    self._latest_cycle = cycle_id
+
+    async def update_one(self, cycle_id: int, payload: dict) -> None:
+        """Drop a known-good payload (the owner's own POST) into the cache so
+        the frontend sees it without waiting for the next refresh."""
+        async with self._lock:
+            self._cache[int(cycle_id)] = payload
+            if self._latest_cycle is None or cycle_id > self._latest_cycle:
+                self._latest_cycle = int(cycle_id)
+
+    async def get(self, cycle_id: int) -> dict | None:
+        async with self._lock:
+            return self._cache.get(int(cycle_id))
+
+    async def get_latest(self) -> tuple[int, dict] | None:
+        async with self._lock:
+            if self._latest_cycle is None:
+                return None
+            return self._latest_cycle, self._cache[self._latest_cycle]
+
+    async def start(self) -> None:
+        if self._task is not None:
+            return
+        self._stop.clear()
+        self._task = asyncio.create_task(self._run(), name="score-cache")
+
+    async def stop(self) -> None:
+        if self._task is None:
+            return
+        self._stop.set()
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            pass
+        self._task = None
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await self.refresh()
+            except Exception as exc:
+                logger.warning("score cache refresh failed: %s", exc)
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self._refresh_sec)
+            except asyncio.TimeoutError:
+                continue
+
+
 def create_app() -> FastAPI:
     settings = load_settings()
     # Ensure our `logger.info(...)` calls reach stdout. uvicorn configures its
@@ -501,6 +602,14 @@ def create_app() -> FastAPI:
         store=LocalEligibilityStore(eligibility_dir=settings.eligibility_dir),
         refresh_sec=300,
     )
+    # Per-cycle scores for the frontend, served from the owner validator's own
+    # `{cycle}/{owner_hotkey}.json` score file (cached, refreshed every 5 min).
+    score_cache = ScoreCache(
+        bucket=bucket,
+        owner_hotkey=settings.owner_validator_hotkey,
+        workdir=Path(tempfile.gettempdir()) / "nexis_score_cache",
+        refresh_sec=300,
+    )
     if record_info_coord.enabled:
         logger.info(
             "record_info coordinator ENABLED bucket=%s owner_hotkey=%s object_key=%s",
@@ -554,10 +663,18 @@ def create_app() -> FastAPI:
         except Exception as exc:
             logger.warning("initial eligibility cache warm-up failed: %s", exc)
         await eligibility_cache.start()
+        # Warm the score cache (owner's per-cycle score files) for the frontend.
+        try:
+            await score_cache.refresh()
+            logger.info("score cache warmed")
+        except Exception as exc:
+            logger.warning("initial score cache warm-up failed: %s", exc)
+        await score_cache.start()
         logger.info("nexis API started")
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
+        await score_cache.stop()
         await eligibility_cache.stop()
         await allowlist_sync.stop()
         await database.close()
@@ -591,6 +708,10 @@ def create_app() -> FastAPI:
             payload=parsed_body,
             envelope=envelope,
         )
+        # If the OWNER posted, push its score into the read cache so the
+        # frontend /v1/get_*total_score endpoints see it immediately.
+        if auth.validator_hotkey.strip() == settings.owner_validator_hotkey.strip():
+            await score_cache.update_one(payload.cycle_id, parsed_body)
         # Owner-only side effect: refresh `record_info.json` from this cycle's
         # top-5 dataset indexes (ranked from the owner's own score file).
         # `schedule()` returns True if the task was actually launched (owner
@@ -621,6 +742,35 @@ def create_app() -> FastAPI:
     async def get_blacklist() -> BlacklistResponse:
         values = await eligibility_cache.get_blacklist()
         return BlacklistResponse(blacklist_hotkeys=values)
+
+    # Per-cycle scores for the frontend. There is no aggregated total_score.json
+    # anymore — these serve the owner validator's own `{owner_hotkey}.json`
+    # score file (cached). URLs kept for frontend compatibility.
+    @app.get("/v1/get_latest_total_score")
+    async def get_latest_score() -> JSONResponse:
+        result = await score_cache.get_latest()
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="no score available yet",
+            )
+        _, payload = result
+        return JSONResponse(content=payload)
+
+    @app.get("/v1/get_total_score/{cycle_id}")
+    async def get_score_for_cycle(cycle_id: int) -> JSONResponse:
+        if cycle_id < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="cycle_id must be >= 1",
+            )
+        payload = await score_cache.get(cycle_id)
+        if payload is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"no score for cycle {cycle_id}",
+            )
+        return JSONResponse(content=payload)
 
     @app.post("/v1/admin/refresh-record-info/{cycle_id}")
     async def admin_refresh_record_info(

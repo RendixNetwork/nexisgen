@@ -296,14 +296,11 @@ async def cleanup_score_workdir(path: Path) -> None:
         logger.warning("score workdir cleanup failed path=%s err=%s", path, exc)
 
 
-async def submit_scores(
-    *,
-    reporter: Any,
-    cycle_id: int,
-    scores: dict[str, MinerScore],
-) -> bool:
-    """POST /v1/training-scores via the reporter."""
-    payload = {
+def build_score_payload(cycle_id: int, scores: dict[str, MinerScore]) -> dict:
+    """Build the `{cycle_id, scores: {...}}` payload that is both saved locally
+    (LocalScoreStore) and POSTed to the API — identical shape so downstream
+    parsers (`parse_score_payload`) work on either source."""
+    return {
         "cycle_id": int(cycle_id),
         "scores": {
             hotkey: {
@@ -315,7 +312,18 @@ async def submit_scores(
             for hotkey, ms in scores.items()
         },
     }
-    return await reporter.post_training_scores(payload=payload)
+
+
+async def submit_scores(
+    *,
+    reporter: Any,
+    cycle_id: int,
+    scores: dict[str, MinerScore],
+) -> bool:
+    """POST /v1/training-scores via the reporter."""
+    return await reporter.post_training_scores(
+        payload=build_score_payload(cycle_id, scores)
+    )
 
 
 # Light no-op so flake8 doesn't complain about asyncio import-only usage in some runs.

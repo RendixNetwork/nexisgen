@@ -38,7 +38,9 @@ from .validator.training import (
     determine_next_cycle_id,
     run_training_cycle,
 )
+from .validator.local_scores import LocalScoreStore
 from .validator.vbench_scorer import (
+    build_score_payload,
     cleanup_score_workdir,
     score_cycle,
     submit_scores,
@@ -409,6 +411,9 @@ async def _run_train_loop(
     # Miner-eligibility policy is fully local to this validator: invalid +
     # blacklist hotkeys come from its own JSON files, never the central API.
     eligibility = LocalEligibilityStore(eligibility_dir=settings.eligibility_dir)
+    # Cycle-gate reads the LOCAL score store (written by this host's `nexis
+    # validate` scoring loop), so training advances with no API dependency.
+    local_score = LocalScoreStore(score_dir=settings.workdir / "scores")
 
     console.print(
         f"trainer loop started validator={validator_hotkey} num_gpus={pool.num_gpus} "
@@ -423,11 +428,11 @@ async def _run_train_loop(
         while True:
             try:
                 cycle_id = await determine_next_cycle_id(
-                    nexis_miner, validator_hotkey
+                    nexis_miner, local_score
                 )
                 if cycle_id is None:
                     logger.info(
-                        "waiting for %s scoring of previous cycle to finish",
+                        "waiting for local score of previous cycle (%s)",
                         validator_hotkey,
                     )
                     await _sleep_poll(settings.train_poll_sec)
@@ -444,17 +449,13 @@ async def _run_train_loop(
                 invalid_hotkeys = eligibility.invalid_hotkey_set()
                 blacklist_hotkeys = eligibility.blacklist_hotkey_set()
 
-                # last_winners (top-5 exemption from the invalid filter) is now
-                # taken from THIS validator's own previous-cycle score file,
-                # consistent with gating + set-weight reading per-validator
-                # results.
+                # last_winners (top-5 exemption from the invalid filter) is
+                # read from THIS validator's own LOCAL previous-cycle score —
+                # consistent with the cycle-gate + set-weight, and with no
+                # central-API dependency.
                 last_score = None
                 if cycle_id > 1:
-                    last_score = await nexis_miner.download_validator_score(
-                        cycle_id - 1,
-                        validator_hotkey,
-                        settings.workdir / "trainer" / f"prev_score_{cycle_id - 1}.json",
-                    )
+                    last_score = local_score.load(cycle_id - 1)
 
                 global_record_index = await _load_global_record_index(
                     record_info_store=record_info_store,
@@ -577,11 +578,15 @@ async def _run_validate_loop(
     nexis_miner: NexisMinerBucket,
 ) -> None:
     reporter = _build_reporter(settings, validator_hotkey)
+    # Local score store shared (via the workdir filesystem) with the `nexis
+    # train` process on this host. The scoring loop writes it; set-weight and
+    # the trainer cycle-gate read it — so neither depends on the API.
+    local_score = LocalScoreStore(score_dir=settings.workdir / "scores")
     scoring_task = asyncio.create_task(
         _scoring_loop(
             settings=settings,
-            validator_hotkey=validator_hotkey,
             nexis_miner=nexis_miner,
+            local_score=local_score,
             reporter=reporter,
         ),
         name="scoring-loop",
@@ -590,7 +595,7 @@ async def _run_validate_loop(
         _set_weight_loop(
             settings=settings,
             validator_hotkey=validator_hotkey,
-            nexis_miner=nexis_miner,
+            local_score=local_score,
         ),
         name="set-weight-loop",
     )
@@ -606,8 +611,8 @@ async def _run_validate_loop(
 async def _scoring_loop(
     *,
     settings: Settings,
-    validator_hotkey: str,
     nexis_miner: NexisMinerBucket,
+    local_score: LocalScoreStore,
     reporter: ValidationResultReporter | None,
 ) -> None:
     last_scored_cycle: int | None = None
@@ -618,8 +623,8 @@ async def _scoring_loop(
                 logger.info("scoring: no cycles yet")
             elif last_scored_cycle == cycle_id:
                 logger.debug("scoring: cycle %d already scored locally", cycle_id)
-            elif await nexis_miner.has_validator_score(cycle_id, validator_hotkey):
-                logger.info("scoring: cycle %d already has my score", cycle_id)
+            elif local_score.has(cycle_id):
+                logger.info("scoring: cycle %d already scored (local)", cycle_id)
                 last_scored_cycle = cycle_id
             else:
                 workdir = settings.workdir / "scorer" / str(cycle_id)
@@ -635,50 +640,33 @@ async def _scoring_loop(
                     eval_data_dir=eval_data_dir,
                 )
                 console.print(f"scored cycle={cycle_id} miners={len(scores)}")
-                if reporter is not None and scores:
-                    ok = await submit_scores(
-                        reporter=reporter,
-                        cycle_id=cycle_id,
-                        scores=scores,
-                    )
-                    if ok:
-                        last_scored_cycle = cycle_id
+                if scores:
+                    payload = build_score_payload(cycle_id, scores)
+                    # Save locally FIRST — this is the source of truth that
+                    # gates the trainer + set-weight, so they no longer depend
+                    # on the API writing the score file.
+                    local_score.save(cycle_id, payload)
+                    last_scored_cycle = cycle_id
+                    # Still POST (best-effort) so the frontend / collector /
+                    # record_info see published scores. A failed POST does not
+                    # block this validator's own cadence.
+                    if reporter is not None:
+                        await submit_scores(
+                            reporter=reporter,
+                            cycle_id=cycle_id,
+                            scores=scores,
+                        )
                 await cleanup_score_workdir(workdir)
         except Exception as exc:
             logger.exception("scoring iteration failed: %s", exc)
         await _sleep_poll(settings.score_poll_sec)
 
 
-async def _find_validator_score_cycle(
-    nexis_miner: NexisMinerBucket,
-    validator_hotkey: str,
-    *,
-    max_lookback: int = 10,
-) -> tuple[int, dict[str, Any]] | None:
-    """Find the latest cycle for which THIS validator published its own score
-    file `{cycle}/{validator_hotkey}.json`, and return (cycle_id, payload).
-
-    Each validator sets weight from its own scoring result, so the comparison
-    is keyed on the validator hotkey instead of a shared aggregated object.
-    """
-    cycles = await nexis_miner.list_cycle_ids()
-    for cycle_id in reversed(cycles[-max_lookback:]):
-        if not await nexis_miner.has_validator_score(cycle_id, validator_hotkey):
-            continue
-        local = Path("/tmp") / f"nexis_score_{validator_hotkey}_{cycle_id}.json"
-        payload = await nexis_miner.download_validator_score(
-            cycle_id, validator_hotkey, local
-        )
-        if isinstance(payload, dict):
-            return cycle_id, payload
-    return None
-
-
 async def _set_weight_loop(
     *,
     settings: Settings,
     validator_hotkey: str,
-    nexis_miner: NexisMinerBucket,
+    local_score: LocalScoreStore,
 ) -> None:
     last_submitted_epoch: int | None = None
     weight_failure_count = 0
@@ -698,12 +686,10 @@ async def _set_weight_loop(
                     await _sleep_poll(settings.block_poll_sec)
                     continue
 
-                found = await _find_validator_score_cycle(
-                    nexis_miner, validator_hotkey
-                )
+                found = local_score.latest()
                 if found is None:
                     logger.info(
-                        "set-weight: no %s.json score found; burning to UID 0",
+                        "set-weight: no local score for %s yet; burning to UID 0",
                         validator_hotkey,
                     )
                     weights_by_hotkey: dict[str, float] = {}

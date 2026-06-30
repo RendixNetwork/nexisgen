@@ -39,6 +39,7 @@ from ..protocol import CROSS_MINER_OVERLAP_REJECT_THRESHOLD
 from ..serialization import read_dataset_parquet, read_manifest
 from ..storage.r2 import R2S3Store
 from ..storage.shared_bucket import NexisMinerBucket
+from .local_scores import LocalScoreStore
 from .dataset_check import (
     DatasetCheckOutcome,
     build_overlap_index,
@@ -609,21 +610,23 @@ async def gather_candidates(
 
 
 async def determine_next_cycle_id(
-    nexis_miner: NexisMinerBucket, validator_hotkey: str
+    nexis_miner: NexisMinerBucket, local_score: LocalScoreStore
 ) -> int | None:
     """Return the cycle_id to train, or None if the previous cycle hasn't been
     scored yet.
 
-    "Scored" is signalled by THIS validator's own score file
-    `{latest}/{validator_hotkey}.json` existing. Each validator therefore
-    advances on its own scoring result instead of waiting for the API to
-    aggregate every validator's submission. (Requires the validator to also
-    run `nexis validate` so its score file is produced.)
+    Cycle existence comes from the bucket (`latest_cycle_id` — the latest
+    `{cycle}/` dir, created by a validator's own eval-output upload). Whether
+    THIS validator has scored it comes from the LOCAL score store written by
+    its `nexis validate` process — NOT the API-written bucket score file. The
+    trainer therefore has no central-API dependency in its cadence; it advances
+    on its own locally-recorded scoring result. (Requires the validator to also
+    run `nexis validate` on the same host so the local score appears.)
     """
     latest = await nexis_miner.latest_cycle_id()
     if latest is None:
         return 1
-    if not await nexis_miner.has_validator_score(latest, validator_hotkey):
+    if not local_score.has(latest):
         return None
     return latest + 1
 
