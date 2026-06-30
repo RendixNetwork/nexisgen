@@ -1,0 +1,784 @@
+{
+  "invalid_hotkeys": [
+    {
+      "cycle_id": null,
+      "hotkey": "5CAAiYwoWXW3UGbKX1T1oYa8oFV6mjuHtmLQdftZdGivW6c7",
+      "reason": ""
+    },
+    {
+      "cycle_id": 74,
+      "hotkey": "5CAovKdgXLvLv2wBGTyxPksCMQAReWPMBQ2jUfJpd1tx7EPo",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 67,
+      "hotkey": "5CB5Bk94W3YUcDBM5acMWMeFPC8yQspghT3E2gjRjW61zkA5",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CDK5JZ2MW79SfAuX1HpHaaNJz5gaks87vTzWWpdoN9J9pr7",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CDpw87YHf2juRmDn1EZxyzHwMp51cfmUBZbKYim9yVCBRsM",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CHs94wPjRmWEzMzsEEW1owdEUR5GPUGxuMszq8CHXvBArC8",
+      "reason": ""
+    },
+    {
+      "cycle_id": 104,
+      "hotkey": "5CJ4yPeAgpjHqJJJo3bMN11uwETpUu3PmWsbKpBiqDKtrM2N",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CJVQU9t1u4xXxgWAk14PQqTvZj7G8C95PMkGTeA5q8jbQUR",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CPt5zU4UZ82uEHWMThobg3vJsjiDPpxkfyyiE4HhmYuMhPp",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CQFQFCKEL13CHyUCkrHa5eZeBugb3DG8UEqUUH7SaAgjGDU",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CSg3Ek3Wx15XYgG2jRS2RqcrkUgMTamRSNZWbQYc8BBJE3L",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CYArMNNJkf6KYdWb4882cfa8uPaP6pHrTX4VaGcdqVPLgE8",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CZZ5GqJSkx96qXuyaWZYSR5h5EBn8qWUupzsnaAjgDDBwyA",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CciVkbxpK3vZsFAfxzP7jx2mLyZthPPWedy3ejkMce4Hmrp",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5Cd13623tdPv8QFawKojZF82EgZxTCoUaiQ2gweLvGXj8iEm",
+      "reason": ""
+    },
+    {
+      "cycle_id": 61,
+      "hotkey": "5CkVhAefZynkr7rfmDyvq33JeFqfkvJTio72G6BVhrXxo7CV",
+      "reason": "global_overlap_exceeded:136>100"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CnrKXiQzHgem2ebSsMfzoH1hYThhLLN6XMVbydowPn2eqZi",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CopmLEakQSX8pFgaFfdEZmpbRGwKJBP1QT8M6ccKSMeQTWM",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5CrLHaMJRoZFgp6vVHcgLJURpRJecArhChwr9TJMg19uZDqq",
+      "reason": ""
+    },
+    {
+      "cycle_id": 61,
+      "hotkey": "5CrLpCD3vtKmMVNd4RSd8sMJjLgeVzatif7b48PCtHtdDMto",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 85,
+      "hotkey": "5CyehycJpo2d2msCMoae2WvqGePy3q6ZeGQMnuM2nK8xREwv",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 60,
+      "hotkey": "5D1rspdD7A8HZijXimjE5zNP5bmvuRQYdt1CmxH7FZtWRKCW",
+      "reason": "manifest_hotkey_mismatch"
+    },
+    {
+      "cycle_id": 65,
+      "hotkey": "5D2DQdkjGmpAfx93exN6tV9o8KnBnycQCsVgCU9FKip3jze2",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5D35Ce34QAGnEPkvLWC9kem23w56V8DYPvgjuoQMcdEedxxw",
+      "reason": ""
+    },
+    {
+      "cycle_id": 94,
+      "hotkey": "5D51PBSzwtX6KcEuqquxrLrzxWuH6J5bZR83qH3E9HGMs6tE",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5D7cS1pLbFkPoYSJs6gTfLW8FzkR7FGCHCKic7DzKmSNBq37",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DCGs1pvp7utKpFSREN4bAZmQQcyRj8E4mkGR4W9377QNEmV",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DFjTNRY6Ff8iuBmrhVmZU7DkVtDQ5Azj5YdZs3sK7C5zcn7",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DHjYehDwAWFbkmxqn5jea6hHcogMYE4RasTTs7y4sFukuum",
+      "reason": ""
+    },
+    {
+      "cycle_id": 104,
+      "hotkey": "5DLick1GKmzVtp2bBH5XkxaoNBn9QzxzESMHhw6HitPB9oZa",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DMPekP5PmmjxaHiQZoMTVGGmKg6tqdkA6L7SjoFmSjYBpbs",
+      "reason": ""
+    },
+    {
+      "cycle_id": 65,
+      "hotkey": "5DNrsffu8jYcNX8n617hS7pXsiZ8V8cCjDStpts8xuB25euw",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DP6GKHhKweRKfgAgyyCrBxu9UioPWbzuRj8SEz6vinqYdK9",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DPUCZ8QcVEZxhgvJy7463dX18WszpCCDnVU92TvWxgRec6H",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DPeMKhZuQGaKbFReSugw4AAshAQzUf3MQZKMwbAQf3RCjgA",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DWkPyJ5neBEfg4i7Tj2aXapS3jtLPdUqRfX8mr6QWBxMEDu",
+      "reason": ""
+    },
+    {
+      "cycle_id": 61,
+      "hotkey": "5DaBf4i6wmCgy4fCyb4n6fx7x72UbRtaY1Rdd3t2k6LeMJtF",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DaKh8fPVhXs4eKqH9kizvJY14pJaYGRvcUcwjZZjt6J1J6e",
+      "reason": ""
+    },
+    {
+      "cycle_id": 80,
+      "hotkey": "5DaL5MiZyePKtxMyNs9i6sVi8Rren3cALSgCfGphBUo5bnz3",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DhGaci2cqqfxiKnn28qCTFLPeZ3aoYCPjUoDEaMnW2FdVYz",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DhRJtUeVA6P8WwgZsQPEkp79fFRCEDacsLSSR81XqGDsPgB",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DhZjy2jXHpHPXD9it5VGbqfhkUXcB6Vpan1QYrxX6iyMRWA",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5Dt7ybWAz71kMNAYNdo9qf1GQP9PqVZGknrrHrwzQ2sXVdt1",
+      "reason": ""
+    },
+    {
+      "cycle_id": 67,
+      "hotkey": "5DtPJEdWctLun2NDVwFxf3XzT9mw16aR4oqrq9G6mAD1cgM6",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DtThHAT1TFfQA2gh8aDZfXhxh2AZEBKA71CwFDoYjGtSikx",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5DtZN4LkzJJWXujFri1g52pmjMkj2J57X9oob5KtUDHTMM6G",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5Dvc7FiR2AJpQDyUwd1RebyR8Efs2a3LkDYjmE6JBZjjZ6rn",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5Dyiwix2VdtCBswZJrgN4274UTc7riJCp16ntULsfQrJuphz",
+      "reason": ""
+    },
+    {
+      "cycle_id": 96,
+      "hotkey": "5E1jWHvvJeMRBda83W3pHeKUTfUthmMebSwAPxEW75sngzj2",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5E4YoymdkRygQxPQtfzvZZwHkYvZ8DYYpjMKSsEGBahcmvQN",
+      "reason": ""
+    },
+    {
+      "cycle_id": 58,
+      "hotkey": "5E5GM1JSSUuq6svZFdURrQR6r1u7VchxW9GZwo6wmEGCbFKb",
+      "reason": "manifest_hotkey_mismatch"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5E9tZNvDb6oWPuwqtSj5h8LMQomYQW4Zfq4yQ8A1mCBLCQ5H",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5E9x6pC1o1x2TuXHoA6QwRpix6WYd6ypdPjHsfVhyBHgkqXa",
+      "reason": ""
+    },
+    {
+      "cycle_id": 47,
+      "hotkey": "5EA1YKAg4yxhxDJoGG91HuqCV9QGC7U1bBhQRgqH6cT7JfLq",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5EAdp9LZtdrwd1MVcT2PpaEMfvDXoifdxkF4LjTTqTzPBiVm",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5EHU3SdBk4fNbGd4p1PWpaCPFcLNfMqWffaAXvDfEmTbQhba",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5EUcuZAoFyWHQmD42xTNwBmsuzC5Nx2QEkU7jJcpHuzbZcwi",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5EZE2Rjv4j6n42LFR5Zuq8J1iS43PRtQLm1WNmS1i5J62dSB",
+      "reason": ""
+    },
+    {
+      "cycle_id": 57,
+      "hotkey": "5EcForLy2KnJRPfXW3jbK4kcUXx5xtQEbPJsfcedKapjmXeK",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 72,
+      "hotkey": "5EeK2C4yKnReaZpeFo1YPM2iWAZQo4kezrh3efvPr7Z14cFg",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 52,
+      "hotkey": "5EfNfCg1RVSDm5GYLk29yAEL8fAyt54fyDmw9jiqqQUeRuhi",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 63,
+      "hotkey": "5EjuCXRKGXmK1tGfz9NwVjs9chCdEEryVQc3yD4KrctEWEdq",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5EptGpixNs2MDCA9NSmU5GA9tTe2jN6PoZEaDkcNKpPhhWQw",
+      "reason": ""
+    },
+    {
+      "cycle_id": 63,
+      "hotkey": "5EqA7zFXXdqR8QE1QnEeRcMtYQ44CrXptaCXgkVi5swQjFxh",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 82,
+      "hotkey": "5EsZv2YuZBie6gAPnNpq9wpLSwQBVoZx5c7fVRman3Qvfy1p",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5F22JM4of6TR2U8qiYoog6uN2x4ApdhLdyRoeySLgCZ94MfU",
+      "reason": ""
+    },
+    {
+      "cycle_id": 82,
+      "hotkey": "5F4SwHHFna7vgeMdYY9SCkoWbYCVxzhSKwpWrmFFoVvJbXjq",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FADFqqYfHUqFSqDBtYMBCtG1iqEujV79WqEtjhjkEMfHMRX",
+      "reason": ""
+    },
+    {
+      "cycle_id": 70,
+      "hotkey": "5FBqVPKLDJJQEZFwRoVX8fuM7bhvQZ7MqGp3e1h5R4N4KfiU",
+      "reason": "global_overlap_exceeded:400>100"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FEeatwFgyWP8kzqqU7XERQCcYug1NLnFzFt6vsQiNZ6swB6",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FFN5Hq4HM227duvC25DJQA3rR8GYsaCNhA9C4WRpwSwBVS9",
+      "reason": ""
+    },
+    {
+      "cycle_id": 58,
+      "hotkey": "5FJB1Po31WKhnmaZSsNPGMdR9wT4W5EGYyoSJnUeQpSGXgM5",
+      "reason": "dataset_parse_error:1 validation error for ClipRecord\nsource_video_url\n  String should have at least 1 character [type=string_too_short, input_value='', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_too_short"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FLCczvNqMerVcymJ8CUkoJA3f2FqnFPNrbzGCnryQbeeWvg",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FNnaxmz3i62cm3BKYszmAXqzeqVfMGVxvcqvnhQFmctwbWh",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FP9RFSjzF2ANHNqKqrjD4CGBfmkLM5wyjKEVb1xSzqd8czZ",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FPRNUbeqzYD83ao4pFgsUspd14HRurAPMFVzw8iib1p6y9f",
+      "reason": ""
+    },
+    {
+      "cycle_id": 48,
+      "hotkey": "5FS3dCcmY5rXgaQzhexw7MDYeWVQKBnTgy5TZjCkTQZn5JuH",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 61,
+      "hotkey": "5FYs3qvA4ywnfCfJGgaXSr91R6wMGCWXs5eejpvy5HwgK22i",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FZVA37otopZY5YALa2LNM54NYNe5uQNsVzU5AjN9HcT7wxi",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FbfiXysyCtCZKqYcv4yc4o1Fa8napfCdNEw5Ko2aijEbxoS",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FbwGuvRNoKEbnBz4BfvSTGMXGi6cbVdgAScTQJhyS511xmj",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5Fc6tAG6R1kbAeHxrAthTmYMAY7AAUC8VuQQquDL42paHfJP",
+      "reason": ""
+    },
+    {
+      "cycle_id": 47,
+      "hotkey": "5FerJzh4Bk6vWNCg9YVx6Rr46zKRUEQytyr5YZbkXW9KrKDN",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FhLP4raUYsiJ7kW62EeguTaKGAk4KurGfiXpv5vT5QBCywb",
+      "reason": ""
+    },
+    {
+      "cycle_id": 52,
+      "hotkey": "5FhRaZ2aeqDLaw3To9YNE5e34KGJwKtTZcYbJ6LC9NTD4Vgz",
+      "reason": "global_overlap_exceeded:101>100"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FjwMjmor8batfHfLchdaGvJi1jURZoyKoP3gVWMPFUwgyPD",
+      "reason": ""
+    },
+    {
+      "cycle_id": 51,
+      "hotkey": "5Ft11Xbk4yYXczeiL7fAqr1KkLnTMa2HucqCt7UjsR3BqKjK",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FuotG8VwYy3raxSKKW3v9WYRBWSzAwbT44qv2fKHqczFWUb",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FuySm31CPpDTgbccwcLy1J2tAheeuYnjrpnyjcVWN6BrPFv",
+      "reason": ""
+    },
+    {
+      "cycle_id": 75,
+      "hotkey": "5Fv6yTkCW2tqubKWfobxcQgR6NG5aLqiqqGFx9Sm5aAd7woM",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 104,
+      "hotkey": "5FvTgAYg9rUkW33K1Cu6mNGG6GbqXqWEkSXarfdTQgnRmecw",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5FyDe7k4goxXbQbU7Akjku6uJrYrdneuXA3WKJC5iqGEmzKC",
+      "reason": ""
+    },
+    {
+      "cycle_id": 49,
+      "hotkey": "5FyHF2CfKrUNtERKY5oNQ4ZxcQLNuM7mTPbjgtoqty8vhEtq",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 69,
+      "hotkey": "5G1nhe7BFXUNnFvZVDuSXtqc17GP4ezRgZg3skKUo4wn6QYf",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 77,
+      "hotkey": "5G1rWCyQyUDBJJtyErV87HTsET72AhheNJ5k3NsYfeJtDeH8",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 59,
+      "hotkey": "5G3jpd4XhsGa22rWo4887JNiq37eSU2eMksa7cLR3xsHgR4B",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 95,
+      "hotkey": "5G3mJrtKuGmUQLu9FqD49PKBvML3oLfT2izb5VbTVt6CyGgA",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GCJnTRtbWw2H2juaDvNxKPkGLadWvr9V4U57RdY7HnwL7Am",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GCL8iwrW95rnthLz1Zks5HD1yBtoXzjxcrPABvikeUqNkBo",
+      "reason": ""
+    },
+    {
+      "cycle_id": 91,
+      "hotkey": "5GCVD4MzxATywVeYmKpQESQHf5b8jta7pFZw2S9ebXYNgjFh",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GEawSEwCqSaBymAC7WFMan2ryi7P8RSQJsF56E75uFd59pc",
+      "reason": ""
+    },
+    {
+      "cycle_id": 80,
+      "hotkey": "5GEuiMt6yi8dBCPwSqLZ2TbZqPSiq1GiQhtgmNkJCbbnpd3C",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GFE3BN6TynUEiXzketrPuJpn8kfw9uWJQyCmpuqrQPkryz9",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GHjqCdKsHiq83jQYvx4Q5t84TSDjHvCg54qw51Fx31TpzGW",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GKTAkJTEa7tGwmPSJQHF6njTV9dRcSTjB7cwYoruQKsPjc6",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GKrgseMe2s5EzNSFiES4iXWB5czJUFMyN2E3p7kPqku3izQ",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GNsdqG3oqsuJ4oD79fNY6EbU3pa5gnhfsWp1gLdSFYoZAEa",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GTafs9BMvxmvhk3ek4sHHDAshmZZTYTzBmo3U5a5FXjd2aQ",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GUFFSNWRAX7p3kQHUWUJryAMtVxbgXZYKeAYT1T9J6FvxLJ",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GYxAZcRXr1nqVtRtNgnJ8xU8cgfvndFLxrNWaQj8i2CPBSf",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5Gb4Tqa71caQ4AKhb3dwywCba31DQ7XgEb76zB8vvXWSHds5",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GbTkzcCA5D2FgrW5fQ6iNGsN8tNcvzExQG5tnXySW871kKZ",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5Gbdt6Z5fQCs97Mt9TDtRWKHw1zhgXsCCv3hm4phrBxoZ8QB",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5Gbju3aukSsVxRE8V5e3cbLCLoNg3ZcVuo9jVJojmBj23jps",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GbtfffCw47HXNxXXrKvdWWNxGCG5gDy3kTV5dDgFsEmNPSm",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GdjPgTwdcaW6YggXrWvKajLH48rwPNGSUofqwC9uk3eMHTr",
+      "reason": ""
+    },
+    {
+      "cycle_id": 52,
+      "hotkey": "5Ge8PspCUTgAoCfDpA5dMuRjXkGD9caeBPQSmZXGVzACwAJ5",
+      "reason": "global_overlap_exceeded:287>100"
+    },
+    {
+      "cycle_id": 78,
+      "hotkey": "5GeNkp1GbMU486J5uiwiJjbfZhPFcf9dhAjGMxSAMhx9vKRM",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GgUKtF8vxY63eAqCV8EjveotjWADpwvi5sGEE4d422BH4Tt",
+      "reason": ""
+    },
+    {
+      "cycle_id": 90,
+      "hotkey": "5Ggq6fSpA9dFWjNwMoN1mpyWNE1mSiMT5yGEJ7uWeHTi9c8t",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GisTZpRHRBa7ctEU4AuomTAanLgce71mVRHmP5Ewnttnwgo",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GmwNHBMU7oG196Cua1uaPR9mMnAFUXCBFbe7VGYevdCFUAv",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GpKFKyojuERKSCuj5dndXBDEMCdUQAcQzEUWS3F64PqhoVA",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GqAHVstFWKWh4QrWoNrVypY2pHMRf6tBiaptRXHpxKNhJvh",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5Gs9MXCoMNvzz43rxJChERXH2zwDkJYu8Hyv5fvA7utScthr",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5Gv6Am8oKLrUwKxjLBbSYS3dBAhJY7BqSeaQwdTwb4ogpB4W",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GxRT5LMLMpUumKWnB4vx2kep8Z65VXSzme2dpDgkPfs2xi3",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5GxjYerJ9jpCqeghGVg5oh8jcqAJJZuoEYnxseqHNt4F1k3Q",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5H188HEmYqsy5w6VTx41A77KtnuL6yjmWGnnJvPQi3iKMkxZ",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5H1K1pXzyRNtrEZiwSvud5k9mzQuDitZgNvviN5qpEawtgBY",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5H1rLY2LrfjW7LGP94nwRDuYdFAJ1SVfU2Xtpe3e8TtwS7e9",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5H3w2E3NH8ZSY5sFiLCucok4z49GvJJHaqjBrQzdJXaLa4W6",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5H68HFkW2qyJVkMjpSoAyXgfC4hFYzGWAHo7rySmE5nTwi8Q",
+      "reason": ""
+    },
+    {
+      "cycle_id": 54,
+      "hotkey": "5H9YSMzFSTkigSZED5BxznmD5YiqSsXYaKjgPkyHeKgmHeEF",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5H9ZHX68ucKo3hCxTdXjutvzpn9hMGh6WuHMww19iEamVJkv",
+      "reason": ""
+    },
+    {
+      "cycle_id": 82,
+      "hotkey": "5HBNUqnEirNbf742fEDUCSTUFMqDMQjScj26XYBzZJqDW9ke",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5HBuvQXsRvABpfxqh6pA91Ri14avrnhJqNLWGuWiPCwVgH1K",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5HESXy3YiLm8TMdog6FVnyK3SWXJM96bJuxi9EZW5W1PbRoL",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5HKJ7F4tVGXYZubYMqXVdjpZcRjpoToSRi2T7Xo5PB9aAobP",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5HMwB4rqW7MnawkfUFUX4FcRcBympynru587RhEZyY8ns43a",
+      "reason": ""
+    },
+    {
+      "cycle_id": 104,
+      "hotkey": "5HNaKBWiQEj1JXsq15NM7u99BrEtzWpmWFtEKrfaDF19vPzd",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5HQWrXrAiMj7uSF5SXcNnyRSpoXtYANhtgPw6bZTiPN8kja3",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5HRBmzAtY6qtAE4FTGj2rVNHz2VvGGaejjceDpnbnm1Gh8rY",
+      "reason": ""
+    },
+    {
+      "cycle_id": 96,
+      "hotkey": "5HRS8rVF2n2XkR98sUTmTQ1EzNFqG6WpwrxEFcrSHVYc1rQo",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 76,
+      "hotkey": "5HSpBFohFNmPWbGG3svv8dLkPh9yn77DzM6SwKmn8kT8nuf2",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5HTbyuH6ij7dwQwPLqVHt6nk2t3uTDG2aG6So2TdcBWN1CRV",
+      "reason": ""
+    },
+    {
+      "cycle_id": 93,
+      "hotkey": "5HTxhX8LSJ3Cw3SEu7iFQvDsrTWULRwPnGhqUWTtQKS1Lqim",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 61,
+      "hotkey": "5HZEXX3zNEWKALgakWoZECXNpKSNiZS1cHsgfKwuA95YgPy2",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": 104,
+      "hotkey": "5HZGVYfqA9hhcSk2VebHL9D38FwdJEd65GNqq19Ms7Km4Bso",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5Hbau97xi1k2VFDhtsqA4YetR7v7CjvCTzsuqAXz3cz6HKnT",
+      "reason": ""
+    },
+    {
+      "cycle_id": 90,
+      "hotkey": "5Hdi8xYF4JAzKmnqXAS77c2uYXCxf8F4Fxcj6pfbLj8dTDCR",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5HgESpYrNtRzTofq5RAtKkjcwzjwMMmZtDwM4LSVr27RxcSg",
+      "reason": ""
+    },
+    {
+      "cycle_id": 49,
+      "hotkey": "5HgzHhW5y5b3owvSukmMkbi4VR9XrizYDsHQEkqDPtd5aA5m",
+      "reason": "selected"
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5HiXfZYXSG1bHYKY2TXsyqM4PwQuP3jkorBn1EwEcEwmtAMg",
+      "reason": ""
+    },
+    {
+      "cycle_id": null,
+      "hotkey": "5Hn6Aat5FmKavvgjDGr8uT2weZo5HG1e6Pnh4CAbnZ6PpX4h",
+      "reason": ""
+    },
+    {
+      "cycle_id": 73,
+      "hotkey": "5Hn6BEiNe5guUo79Jh1cuFYmAS1mhW99MZDDyFkNywgGMq2W",
+      "reason": "selected"
+    }
+  ]
+}

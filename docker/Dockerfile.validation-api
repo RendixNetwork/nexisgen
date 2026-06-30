@@ -9,6 +9,10 @@ WORKDIR ${APP_HOME}
 
 COPY pyproject.toml README.md ./
 COPY nexis ./nexis
+# Eligibility seed (invalid + blacklist hotkeys) served by the GET endpoints.
+# Bake it in as a fallback; bind-mount a maintained copy over /app/eligibility
+# in the compose file to serve live updates.
+COPY eligibility ./eligibility
 
 RUN pip install --upgrade pip \
     && pip install . \

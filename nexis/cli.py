@@ -32,6 +32,7 @@ from .storage.shared_bucket import (
 )
 from .validator.dataset_check import latest_complete_interval_id, list_miner_interval_ids
 from .validator.docker_runner import DockerGPUPool
+from .validator.eligibility import LocalEligibilityStore
 from .validator.reporting import ValidationResultReporter
 from .validator.training import (
     determine_next_cycle_id,
@@ -319,12 +320,10 @@ def train(
     settings = load_settings()
     validator_hotkey = _resolve_hotkey_ss58_from_wallet(settings)
     _configure_logging("INFO", debug=debug)
-    is_owner = validator_hotkey == settings.owner_validator_hotkey.strip()
-    if not is_owner:
-        raise typer.BadParameter(
-            f"`nexis train` is reserved for the owner validator "
-            f"({settings.owner_validator_hotkey}); your hotkey={validator_hotkey}"
-        )
+    # Any validator can run the trainer individually — each one trains on the
+    # miners it selects, scores with `nexis validate`, and uploads its eval
+    # outputs to `{cycle_id}/{its_own_hotkey}/` in the shared bucket. Requires
+    # nexis_miner WRITE credentials so it can publish under its own hotkey.
     nexis_miner = _build_nexis_miner_bucket(settings, require_write=True)
     if nexis_miner is None:
         raise typer.BadParameter(
@@ -407,11 +406,18 @@ async def _run_train_loop(
         r2_region=settings.r2_region,
     )
 
-    reporter = _build_reporter(settings, validator_hotkey)
+    # Miner-eligibility policy is fully local to this validator: invalid +
+    # blacklist hotkeys come from its own JSON files, never the central API.
+    eligibility = LocalEligibilityStore(eligibility_dir=settings.eligibility_dir)
 
     console.print(
-        f"trainer loop started owner={validator_hotkey} num_gpus={pool.num_gpus} "
+        f"trainer loop started validator={validator_hotkey} num_gpus={pool.num_gpus} "
         f"poll_sec={settings.train_poll_sec}"
+    )
+    logger.info(
+        "eligibility files: invalid=%s blacklist=%s",
+        eligibility.invalid_path,
+        eligibility.blacklist_path,
     )
     async with _open_subtensor(settings.bt_network) as subtensor:
         while True:
@@ -435,15 +441,8 @@ async def _run_train_loop(
                 committed_payload = await manager.get_all_credentials_async(subtensor=subtensor)
                 committed_hotkeys = [hk for hk in hotkeys if committed_payload.get(hk)]
 
-                invalid_hotkeys: set[str] = set()
-                blacklist_hotkeys: set[str] = set()
-                if reporter is not None:
-                    invalid_hotkeys = {
-                        item for item in await reporter.fetch_invalid_hotkeys() if item
-                    }
-                    blacklist_hotkeys = {
-                        item for item in await reporter.fetch_blacklist_hotkeys() if item
-                    }
+                invalid_hotkeys = eligibility.invalid_hotkey_set()
+                blacklist_hotkeys = eligibility.blacklist_hotkey_set()
 
                 # last_winners (top-5 exemption from the invalid filter) is now
                 # taken from THIS validator's own previous-cycle score file,
@@ -480,13 +479,14 @@ async def _run_train_loop(
                 async def on_select(
                     entries: list[dict[str, Any]], cycle: int
                 ) -> None:
-                    if reporter is None or not entries:
+                    if not entries:
                         return
-                    await reporter.post_invalid_hotkeys(entries=entries)
+                    written = eligibility.add_invalid_hotkeys(entries)
                     logger.info(
-                        "submitted %d hotkeys to invalid list cycle=%d",
-                        len(entries),
+                        "added %d hotkeys to local invalid list cycle=%d (%s)",
+                        written,
                         cycle,
+                        eligibility.invalid_path,
                     )
 
                 cycle_workdir = settings.workdir / "trainer"

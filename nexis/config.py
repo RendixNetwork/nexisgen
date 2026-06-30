@@ -78,10 +78,10 @@ class Settings(BaseSettings):
     record_info_object_key: str = Field(default="record_info.json", alias="NEXIS_RECORD_INFO_OBJECT_KEY")
 
     # Eval-data bucket (read-only). Default credentials let every validator
-    # and the owner-trainer download the canonical eval dataset out of the
-    # box; override via env if the network rotates keys or moves buckets.
-    # Synced to `<workdir>/eval_data/` before every training and scoring
-    # cycle so trainer / vbench containers see fresh data.
+    # download the canonical eval dataset out of the box; override via env if
+    # the network rotates keys or moves buckets. Synced to
+    # `<workdir>/eval_data/` before every training and scoring cycle so each
+    # validator's trainer / vbench containers see fresh data.
     nexis_eval_bucket: str = Field(
         default="nexis-eval", alias="NEXIS_EVAL_BUCKET"
     )
@@ -146,6 +146,16 @@ class Settings(BaseSettings):
         alias="NEXIS_VALIDATION_API_URL",
     )
     validation_api_timeout_sec: float = Field(default=120.0, alias="NEXIS_VALIDATION_API_TIMEOUT_SEC")
+
+    # Per-validator local miner-eligibility policy. Each validator keeps its
+    # own invalid + blacklist hotkey lists as JSON files instead of
+    # fetching/posting them to a central API. The validator reads both files
+    # and appends newly-invalidated hotkeys to its own copy — it never contacts
+    # the API for eligibility. The repo ships seed files in `eligibility/`
+    # (committed); each validator uses and updates its own working copy.
+    eligibility_dir: Path = Field(
+        default=Path("eligibility"), alias="NEXIS_ELIGIBILITY_DIR"
+    )
 
     # Evidence API server settings
     validation_api_postgres_dsn: str = Field(

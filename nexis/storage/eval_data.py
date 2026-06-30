@@ -1,10 +1,10 @@
 """Sync the canonical eval dataset from R2 to a local dir.
 
 The `nexis-eval` bucket holds the network's evaluation dataset under a
-configurable prefix (default `eval_data/`). Validators and the owner-trainer
-need a fresh copy before every cycle:
+configurable prefix (default `eval_data/`). Every validator needs a fresh
+copy before each cycle (each runs both training and scoring):
 
-- Trainers mount the local dir at `/workspace/eval_data` inside
+- The trainer mounts the local dir at `/workspace/eval_data` inside
   `rendixnetwork/train:latest`.
 - VBench scorers mount it at `/eval_data` inside `rendixnetwork/vbench:latest`.
 

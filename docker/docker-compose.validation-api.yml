@@ -32,6 +32,15 @@ services:
       - ${VALIDATION_API_ENV_FILE:-./validation-api.env}
     environment:
       NEXIS_VALIDATION_API_POSTGRES_DSN: postgresql://${POSTGRES_USER:-nexis}:${POSTGRES_PASSWORD:-nexis}@postgres:5432/${POSTGRES_DB:-nexis_validation}
+      # GET /v1/invalid-hotkeys and /v1/get_blacklist serve these files
+      # (cached, 5-min refresh). Mounted below so updates appear without a
+      # rebuild; falls back to the image's baked-in seed if unmounted.
+      NEXIS_ELIGIBILITY_DIR: /app/eligibility
+    volumes:
+      # Host eligibility dir served by the read endpoints. Default
+      # (../eligibility) = repo root when running compose from docker/. Point
+      # it at a maintained copy to serve live invalid/blacklist data.
+      - ${NEXIS_ELIGIBILITY_HOST_PATH:-../eligibility}:/app/eligibility:ro
     # Bind to loopback only.  External traffic reaches the API via nginx on
     # the host (api.nexisgen.ai → 443 → proxy_pass 127.0.0.1:8080).  Setting
     # the bind address to 127.0.0.1 blocks the 0.0.0.0 default and makes the

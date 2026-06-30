@@ -5,7 +5,7 @@ The `nexis` image runs all four roles via the `command` override:
 | Role                | Compose file                       | Notes                                              |
 |---------------------|-------------------------------------|----------------------------------------------------|
 | Validator (scoring) | `docker-compose.validator.yml`     | Runs VBench in sibling containers (host docker.sock).|
-| Trainer (owner)     | `docker-compose.trainer.yml`       | NVIDIA GPUs + sibling containers; one stack only.  |
+| Trainer (any validator) | `docker-compose.trainer.yml`   | NVIDIA GPUs + sibling containers.                  |
 | Validation API      | `docker-compose.validation-api.yml`| FastAPI + Postgres; writes to `nexis_miner` bucket.|
 | Observability       | `docker-compose.observability.yml` | Optional Loki + Promtail + Grafana.                |
 
@@ -37,7 +37,7 @@ docker logs -f nexis-validator
 The validator container needs `/var/run/docker.sock` mounted so it can spawn
 `rendixnetwork/vbench:latest` on the host. The compose file already sets that up.
 
-## Quick start (owner trainer)
+## Quick start (trainer — any validator)
 
 ```bash
 cd docker
@@ -46,8 +46,9 @@ cp compose.env.example  compose.env
 chmod 600 trainer.env compose.env
 
 # Edit:
-#   compose.env: BT_WALLET_HOST_PATH, NEXIS_TRAINER_MODELS_DIR, NEXIS_TRAINER_CONFIG_JSON
-#   trainer.env: NEXIS_MINER_*_KEY (read+write), wallet, owner hotkey
+#   compose.env: BT_WALLET_HOST_PATH, NEXIS_TRAINER_MODELS_DIR, NEXIS_TRAINER_CONFIG_JSON,
+#                NEXIS_ELIGIBILITY_HOST_PATH (host repo eligibility/ dir)
+#   trainer.env: NEXIS_MINER_*_KEY (read+write), wallet
 
 # Populate the model dir on the host once:
 #   cd /path/to/nexisgen && pip install huggingface_hub && python download_model.py

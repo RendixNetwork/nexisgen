@@ -1,6 +1,6 @@
 name: nexis-trainer
 
-# Owner-only stack. Runs `nexis train`, which:
+# Per-validator trainer stack (any validator can run it). Runs `nexis train`, which:
 #   * polls the shared `nexis_miner` bucket for the next training cycle
 #   * spawns rendixnetwork/train:latest sibling containers (one per GPU)
 #   * uploads eval outputs to nexis_miner/{cycle_id}/{miner_hotkey}/
@@ -36,8 +36,16 @@ services:
       # constructs `-v <workdir>/cycle/<id>/...:...` for sibling trainer/eval
       # containers and the host daemon resolves the left side on the HOST.
       NEXIS_WORKDIR: ${NEXIS_WORKDIR_HOST_PATH:-/var/lib/nexis}
+      # Miner-eligibility files live at this container path; the bind mount
+      # below points it at the host repo's `eligibility/` so reads/writes hit
+      # the real committed files (persistent across restarts, git-synced).
+      NEXIS_ELIGIBILITY_DIR: /app/eligibility
     volumes:
       - ${NEXIS_WORKDIR_HOST_PATH:-/var/lib/nexis}:${NEXIS_WORKDIR_HOST_PATH:-/var/lib/nexis}
+      # Host repo `eligibility/` (default ../eligibility relative to this
+      # compose file = repo root). The trainer reads the invalid+blacklist
+      # seed and appends newly-invalidated hotkeys back to the host files.
+      - ${NEXIS_ELIGIBILITY_HOST_PATH:-../eligibility}:/app/eligibility
       - ${BT_WALLET_HOST_PATH:?BT_WALLET_HOST_PATH is required}:/root/.bittensor/wallets:ro
       # Host docker socket — sibling containers run on the host daemon.
       - /var/run/docker.sock:/var/run/docker.sock

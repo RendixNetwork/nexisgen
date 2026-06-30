@@ -1,4 +1,7 @@
-"""Owner-trainer orchestrator for the `nexis train` command.
+"""Per-validator trainer orchestrator for the `nexis train` command.
+
+Any validator can run this; each trains on the miners it selects and uploads
+its eval outputs under its own hotkey.
 
 Trainer container expectations (matching `rendixnetwork/train:latest`):
 
@@ -612,10 +615,10 @@ async def determine_next_cycle_id(
     scored yet.
 
     "Scored" is signalled by THIS validator's own score file
-    `{latest}/{validator_hotkey}.json` existing. The owner-trainer therefore
+    `{latest}/{validator_hotkey}.json` existing. Each validator therefore
     advances on its own scoring result instead of waiting for the API to
-    aggregate every validator's submission. (Requires the owner to also run
-    `nexis validate` so its score file is produced.)
+    aggregate every validator's submission. (Requires the validator to also
+    run `nexis validate` so its score file is produced.)
     """
     latest = await nexis_miner.latest_cycle_id()
     if latest is None:

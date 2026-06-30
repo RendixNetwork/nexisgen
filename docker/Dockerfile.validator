@@ -28,6 +28,10 @@ COPY nexis ./nexis
 # trainer container at runtime (NEXIS_TRAINER_MODELS_DIR) and from there
 # into the spawned `train:latest` sibling.
 COPY config.json download_model.py ./
+# Miner-eligibility seed (invalid + blacklist hotkeys). Baked in as a fallback
+# for runs without a mount; the trainer compose bind-mounts the host repo's
+# `eligibility/` over this so updates persist and stay git-synced.
+COPY eligibility ./eligibility
 
 RUN pip install --upgrade pip \
     && pip install . \

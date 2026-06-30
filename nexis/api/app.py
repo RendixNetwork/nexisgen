@@ -20,16 +20,14 @@ from ..storage.shared_bucket import (
     build_nexis_miner_credentials,
 )
 from ..validator.dataset_check import canonical_source_key
+from ..validator.eligibility import LocalEligibilityStore
 from .auth import RequestAuthenticator, build_score_envelope
 from .db import Database
 from .metagraph_sync import MetagraphAllowlistSync, ValidatorAllowlistCache
 from .repository import ValidationEvidenceRepository
 from .schemas import (
     BlacklistResponse,
-    InvalidHotkeysIngestRequest,
-    InvalidHotkeysIngestResponse,
     InvalidHotkeysListResponse,
-    InvalidHotkeysResetResponse,
     TrainingScoresIngestRequest,
     TrainingScoresIngestResponse,
 )
@@ -342,6 +340,71 @@ class ScoreSubmissionCoordinator:
             return len(payload.get("scores") or {})
 
 
+class EligibilityCache:
+    """Serve the invalid + blacklist hotkey lists from the local `eligibility/`
+    JSON files (the same files validators use), cached and refreshed on a timer.
+
+    The two GET endpoints read from this cache so high request volume never
+    touches the disk per-request. A background task re-reads the files every
+    `refresh_sec` (default 300s = 5 min), so updates to the files (e.g. a
+    bind-mounted, maintained copy) appear within one refresh interval.
+    """
+
+    def __init__(self, *, store: LocalEligibilityStore, refresh_sec: int = 300):
+        self._store = store
+        self._refresh_sec = max(int(refresh_sec), 10)
+        self._invalid: list[dict] = []
+        self._blacklist: list[str] = []
+        self._lock = asyncio.Lock()
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+
+    async def refresh(self) -> None:
+        # File reads are fast + synchronous; do them outside the lock and only
+        # swap the cached copies under it.
+        invalid = self._store.invalid_entries()
+        blacklist = sorted(self._store.blacklist_hotkey_set())
+        async with self._lock:
+            self._invalid = invalid
+            self._blacklist = blacklist
+
+    async def get_invalid(self) -> list[dict]:
+        async with self._lock:
+            return list(self._invalid)
+
+    async def get_blacklist(self) -> list[str]:
+        async with self._lock:
+            return list(self._blacklist)
+
+    async def start(self) -> None:
+        if self._task is not None:
+            return
+        self._stop.clear()
+        self._task = asyncio.create_task(self._run(), name="eligibility-cache")
+
+    async def stop(self) -> None:
+        if self._task is None:
+            return
+        self._stop.set()
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            pass
+        self._task = None
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await self.refresh()
+            except Exception as exc:
+                logger.warning("eligibility cache refresh failed: %s", exc)
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self._refresh_sec)
+            except asyncio.TimeoutError:
+                continue
+
+
 def create_app() -> FastAPI:
     settings = load_settings()
     # Ensure our `logger.info(...)` calls reach stdout. uvicorn configures its
@@ -431,6 +494,13 @@ def create_app() -> FastAPI:
         owner_hotkey=settings.owner_validator_hotkey,
         workdir=Path(tempfile.gettempdir()) / "nexis_record_info",
     )
+
+    # Invalid + blacklist hotkeys are served from the local `eligibility/`
+    # JSON files (cached, refreshed every 5 min) — no database round-trip.
+    eligibility_cache = EligibilityCache(
+        store=LocalEligibilityStore(eligibility_dir=settings.eligibility_dir),
+        refresh_sec=300,
+    )
     if record_info_coord.enabled:
         logger.info(
             "record_info coordinator ENABLED bucket=%s owner_hotkey=%s object_key=%s",
@@ -476,10 +546,19 @@ def create_app() -> FastAPI:
         except Exception as exc:
             logger.warning("initial validator allowlist refresh failed: %s", exc)
         await allowlist_sync.start()
+        # Warm the eligibility cache once so the first request is served from
+        # memory, then refresh it on a 5-min timer.
+        try:
+            await eligibility_cache.refresh()
+            logger.info("eligibility cache warmed")
+        except Exception as exc:
+            logger.warning("initial eligibility cache warm-up failed: %s", exc)
+        await eligibility_cache.start()
         logger.info("nexis API started")
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
+        await eligibility_cache.stop()
         await allowlist_sync.stop()
         await database.close()
         logger.info("nexis API stopped")
@@ -528,52 +607,19 @@ def create_app() -> FastAPI:
             miner_count=miner_count,
         )
 
+    # Eligibility is maintained by validators as local `eligibility/` JSON
+    # files (nexis/validator/eligibility.py). These read endpoints serve the
+    # API host's copy from an in-memory cache (refreshed every 5 min). Edit the
+    # files (or the bind-mounted source) to change what's served — there is no
+    # write/reset endpoint.
     @app.get("/v1/invalid-hotkeys", response_model=InvalidHotkeysListResponse)
     async def list_invalid_hotkeys() -> InvalidHotkeysListResponse:
-        rows = await repository.list_invalid_hotkeys()
+        rows = await eligibility_cache.get_invalid()
         return InvalidHotkeysListResponse(invalid_hotkeys=rows)
-
-    @app.post("/v1/invalid-hotkeys", response_model=InvalidHotkeysIngestResponse)
-    async def post_invalid_hotkeys(request: Request) -> InvalidHotkeysIngestResponse:
-        body = await request.body()
-        auth = await authenticator.authenticate(request, body)
-        try:
-            payload = InvalidHotkeysIngestRequest.model_validate_json(body)
-        except ValidationError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=exc.errors(),
-            ) from exc
-        # Upsert: a re-post of an existing hotkey overwrites its reason +
-        # cycle_id, instead of being silently skipped.
-        affected = await repository.upsert_invalid_hotkeys(
-            entries=[entry.model_dump() for entry in payload.invalid_hotkeys]
-        )
-        return InvalidHotkeysIngestResponse(
-            validator_hotkey=auth.validator_hotkey,
-            saved_count=affected,
-        )
-
-    @app.delete("/v1/invalid-hotkeys", response_model=InvalidHotkeysResetResponse)
-    async def reset_invalid_hotkeys(request: Request) -> InvalidHotkeysResetResponse:
-        token_required = settings.validation_api_admin_token.strip()
-        if not token_required:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="admin token not configured",
-            )
-        provided = request.headers.get("x-admin-token", "").strip()
-        if provided != token_required:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="invalid admin token",
-            )
-        cleared = await repository.reset_invalid_hotkeys()
-        return InvalidHotkeysResetResponse(cleared=cleared)
 
     @app.get("/v1/get_blacklist", response_model=BlacklistResponse)
     async def get_blacklist() -> BlacklistResponse:
-        values = await repository.get_blacklisted_hotkeys()
+        values = await eligibility_cache.get_blacklist()
         return BlacklistResponse(blacklist_hotkeys=values)
 
     @app.post("/v1/admin/refresh-record-info/{cycle_id}")
