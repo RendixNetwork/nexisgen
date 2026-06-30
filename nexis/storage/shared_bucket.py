@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Iterable
 
 from .r2 import R2Credentials, R2S3Store, build_r2_endpoint_url
 
@@ -137,3 +138,35 @@ class NexisMinerBucket:
                 validator_hotkey,
             )
             return None
+
+    async def list_validator_score_keys(self, cycle_id: int) -> list[str]:
+        """Return every `{cycle}/{validator_hotkey}.json` key for a cycle.
+
+        Used by the offline score-verification tool. Skips the legacy
+        aggregate object (`total_score.json`) if any old cycle still has one —
+        it isn't a signed validator envelope.
+        """
+        keys = await self._store.list_prefix(f"{cycle_id}/")
+        out: list[str] = []
+        for key in keys:
+            parts = key.split("/")
+            if (
+                len(parts) == 2
+                and parts[1].endswith(".json")
+                and parts[1] != "total_score.json"
+            ):
+                out.append(key)
+        return sorted(out)
+
+    async def download_keys(
+        self, keys: Iterable[str], workdir: Path
+    ) -> dict[str, Path]:
+        """Download each key under `workdir` (mirroring the key path) and
+        return `{key: local_path}` for the ones that succeeded."""
+        result: dict[str, Path] = {}
+        for key in keys:
+            local = workdir / key
+            ok = await self._store.download_file(key, local)
+            if ok and local.exists():
+                result[key] = local
+        return result
