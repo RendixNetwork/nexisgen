@@ -70,12 +70,19 @@ class ReadCredentialCommitmentManager:
                     credentials=credentials,
                     subtensor=owned_subtensor,
                 )
-        wallet = bt.wallet(
+        wallet = bt.Wallet(
             name=self.wallet_name,
             hotkey=self.wallet_hotkey,
             path=str(self.wallet_path.expanduser()),
         )
-        await _resolve_maybe_awaitable(subtensor.commit(wallet, self.netuid, commitment_payload))
+        # bittensor >=10 renamed `commit` to `set_commitment`; keep a fallback
+        # for anyone still importing this module against an older SDK.
+        commit_fn = getattr(subtensor, "set_commitment", None) or getattr(
+            subtensor, "commit"
+        )
+        await _resolve_maybe_awaitable(
+            commit_fn(wallet, self.netuid, commitment_payload)
+        )
         logger.info("committed read credentials on-chain for hotkey=%s", hotkey)
         return credentials.read_commitment
 
@@ -92,6 +99,27 @@ class ReadCredentialCommitmentManager:
             if subtensor is None:
                 async with _open_subtensor(self.network) as owned_subtensor:
                     return await self.get_all_credentials_async(subtensor=owned_subtensor)
+
+            # Preferred path (bittensor >=10): the SDK returns a clean
+            # {hotkey_ss58: commitment_str} dict and handles the chain's
+            # runtime type registry itself — no raw storage decoding here.
+            get_all = getattr(subtensor, "get_all_commitments", None)
+            if callable(get_all):
+                raw = await _resolve_maybe_awaitable(get_all(self.netuid))
+                if isinstance(raw, dict):
+                    for hotkey, commitment_str in raw.items():
+                        decoded = self._decode_payload(str(commitment_str))
+                        if decoded is None:
+                            continue
+                        commitments[str(hotkey)] = {
+                            "account_id": decoded["account_id"],
+                            "read_access_key": decoded["read_access_key"],
+                            "read_secret_key": decoded["read_secret_key"],
+                            "commitment": str(commitment_str),
+                        }
+                    return commitments
+
+            # Fallback: raw storage query (older SDKs / test doubles).
             substrate = getattr(subtensor, "substrate", None)
             if substrate is None:
                 return commitments
@@ -173,9 +201,20 @@ class ReadCredentialCommitmentManager:
     def _decode_hotkey(self, key: Any) -> str | None:
         try:
             if isinstance(key, (list, tuple)) and key:
-                from bittensor.core.chain_data import decode_account_id
+                raw = key[0]
+                if isinstance(raw, str):
+                    return raw
+                try:
+                    # bittensor <10 helper (removed in 10.x).
+                    from bittensor.core.chain_data import decode_account_id
 
-                return decode_account_id(key[0])
+                    return decode_account_id(raw)
+                except ImportError:
+                    # bittensor >=10: encode the raw AccountId32 ourselves via
+                    # the scalecodec namespace (provided by cyscale).
+                    from scalecodec.utils.ss58 import ss58_encode
+
+                    return ss58_encode(bytes(raw), 42)
         except Exception:
             return None
         return None

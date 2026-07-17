@@ -33,13 +33,14 @@ COPY config.json download_model.py ./
 # `eligibility/` over this so updates persist and stay git-synced.
 COPY eligibility ./eligibility
 
+# bittensor 10.5.0 brings async-substrate-interface 2.x + cyscale (which
+# provides the `scalecodec` namespace). The genuine `scalecodec` package must
+# NOT be co-installed — async-substrate-interface 2.x refuses to start if both
+# are present. A clean build never pulls it, but guard-uninstall anyway in case
+# a transitive dep sneaks it in.
 RUN pip install --upgrade pip \
     && pip install . \
-    # bittensor 9.12.2 brings in async-substrate-interface 2.x, whose __init__
-    # crashes when both `scalecodec` and `cyscale` are present (it's a known
-    # upstream packaging bug — 2.x both forbids and imports from `scalecodec`).
-    # Pin to 1.6.4, the last release without that broken check.
-    && pip install --no-cache-dir "async-substrate-interface==1.6.4"
+    && pip uninstall -y scalecodec 2>/dev/null; pip show cyscale >/dev/null
 
 COPY docker/healthcheck_validator.py /usr/local/bin/healthcheck_validator.py
 RUN chmod 0555 /usr/local/bin/healthcheck_validator.py

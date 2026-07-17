@@ -56,14 +56,14 @@ def run_async(coro: Any) -> Any:
 
 
 def patch_bittensor_wallet(monkeypatch: Any) -> list[dict[str, str]]:
-    """Patch bittensor.wallet and return captured wallet call args."""
+    """Patch bittensor.Wallet and return captured wallet call args."""
     calls: list[dict[str, str]] = []
 
     def fake_wallet(*, name: str, hotkey: str, path: str) -> object:
         calls.append({"name": name, "hotkey": hotkey, "path": path})
         return {"wallet": "ok"}
 
-    monkeypatch.setitem(sys.modules, "bittensor", SimpleNamespace(wallet=fake_wallet))
+    monkeypatch.setitem(sys.modules, "bittensor", SimpleNamespace(Wallet=fake_wallet))
     return calls
 
 

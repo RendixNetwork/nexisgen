@@ -35,6 +35,10 @@ def _looks_like_outdated_tx(result: object) -> bool:
                 return True
     if isinstance(result, str):
         return any(s in result.lower() for s in _OUTDATED_TX_SIGNALS)
+    # bittensor >=10 returns an ExtrinsicResponse object with a `.message`.
+    message = getattr(result, "message", None)
+    if isinstance(message, str):
+        return any(s in message.lower() for s in _OUTDATED_TX_SIGNALS)
     return False
 
 
@@ -159,7 +163,7 @@ async def submit_weights_to_chain_async(
             unknown_hotkeys=payload.unknown_hotkeys,
         )
 
-    wallet = bt.wallet(
+    wallet = bt.Wallet(
         name=wallet_name,
         hotkey=wallet_hotkey,
         path=str(wallet_path.expanduser()),
@@ -185,6 +189,9 @@ async def submit_weights_to_chain_async(
             submitted = bool(result[0])
         elif isinstance(result, bool):
             submitted = result
+        elif hasattr(result, "success"):
+            # bittensor >=10: ExtrinsicResponse with .success / .message.
+            submitted = bool(result.success)
         if submitted:
             reason = ""
             break

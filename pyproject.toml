@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nexisgen"
-version = "1.0.4"
+version = "1.0.5"
 description = "Nexisgen subnet miner/validator implementation."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -16,12 +16,15 @@ dependencies = [
   "python-dotenv>=1.0.1",
   "pyarrow>=14.0.0",
   "aiobotocore>=2.13.0",
-  "bittensor==9.12.2",
-  # bittensor 9.12.2 transitively brings in async-substrate-interface; 2.x has
-  # a broken __init__ that crashes if `scalecodec` is installed (which it must
-  # be — async-substrate-interface 2.x itself imports from `scalecodec`).
-  # 1.6.4 is the last release without that check.
-  "async-substrate-interface==1.6.4",
+  # 10.5.0: required since the mid-2026 subtensor runtime upgrade introduced
+  # strong newtypes (e.g. NetUid as a Composite-wrapped u16) that the old
+  # 9.12.2 + async-substrate-interface 1.6.4 stack cannot SCALE-encode
+  # ("Invalid type for data: 70 ... type_def: Composite"). 10.5.0 pins
+  # async-substrate-interface>=2.0.4 + cyscale, which handle the new registry.
+  # NB: do NOT install the genuine `scalecodec` package alongside — cyscale
+  # provides that namespace and async-substrate-interface 2.x refuses to start
+  # if both are present.
+  "bittensor==10.5.0",
   "openai>=1.40.0",
   "yt-dlp",
   "fastapi",

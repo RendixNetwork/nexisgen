@@ -80,7 +80,7 @@ def _configure_logging(level: str, *, debug: bool = False) -> None:
 def _resolve_hotkey_ss58_from_wallet(settings: Settings) -> str:
     import bittensor as bt
 
-    wallet = bt.wallet(
+    wallet = bt.Wallet(
         name=settings.bt_wallet_name,
         hotkey=settings.bt_wallet_hotkey,
         path=str(settings.bt_wallet_path.expanduser()),
@@ -530,7 +530,7 @@ def _build_reporter(settings: Settings, validator_hotkey: str) -> ValidationResu
     api_url = settings.validation_api_url.strip()
     if not api_url:
         return None
-    wallet = bt.wallet(
+    wallet = bt.Wallet(
         name=settings.bt_wallet_name,
         hotkey=settings.bt_wallet_hotkey,
         path=str(settings.bt_wallet_path.expanduser()),
